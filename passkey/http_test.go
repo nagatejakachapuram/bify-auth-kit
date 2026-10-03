@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
+
+	"github.com/nagatejakachapuram/bify-auth-kit/passkeytest"
 )
 
 type httpFixture struct {
@@ -100,8 +102,8 @@ func TestAddingAPasskeyNeedsARecentConfirmation(t *testing.T) {
 		CeremonyID string                      `json:"ceremonyId"`
 		Options    protocol.CredentialCreation `json:"options"`
 	}](t, rec)
-	a := newAuthenticator(t, testRP, testOrigin)
-	rec = f.do(t, "POST", PathRegisterVerify, map[string]any{"ceremonyId": started.CeremonyID, "name": "iPhone", "credential": json.RawMessage(a.register(t, &started.Options))}, true)
+	a := passkeytest.NewAuthenticator(t, testRP, testOrigin)
+	rec = f.do(t, "POST", PathRegisterVerify, map[string]any{"ceremonyId": started.CeremonyID, "name": "iPhone", "credential": json.RawMessage(a.Register(t, &started.Options))}, true)
 	if rec.Code != http.StatusOK || len(f.events) != 1 || f.events[0] != "passkey_added" {
 		t.Fatalf("register verify = %d %s, events %v", rec.Code, rec.Body.String(), f.events)
 	}
@@ -119,19 +121,19 @@ func TestAddingAPasskeyNeedsARecentConfirmation(t *testing.T) {
 
 func TestPasskeySignInStartsASession(t *testing.T) {
 	f := newHTTPFixture(t)
-	a := newAuthenticator(t, testRP, testOrigin)
+	a := passkeytest.NewAuthenticator(t, testRP, testOrigin)
 	f.registerPasskey(t, a)
 	rec := f.do(t, "POST", PathLoginOptions, nil, false)
 	started := decode[struct {
 		CeremonyID string                       `json:"ceremonyId"`
 		Options    protocol.CredentialAssertion `json:"options"`
 	}](t, rec)
-	rec = f.do(t, "POST", PathLoginVerify, map[string]any{"ceremonyId": started.CeremonyID, "credential": json.RawMessage(a.assert(t, &started.Options))}, false)
+	rec = f.do(t, "POST", PathLoginVerify, map[string]any{"ceremonyId": started.CeremonyID, "credential": json.RawMessage(a.Assert(t, &started.Options))}, false)
 	if rec.Code != http.StatusOK || f.signedIn != f.user.ID || rec.Header().Get("Set-Cookie") == "" {
 		t.Fatalf("passkey sign-in = %d %s, signed in %q", rec.Code, rec.Body.String(), f.signedIn)
 	}
 	// A failed sign-in says nothing about whether the account or passkey exists.
-	rec = f.do(t, "POST", PathLoginVerify, map[string]any{"ceremonyId": started.CeremonyID, "credential": json.RawMessage(a.assert(t, &started.Options))}, false)
+	rec = f.do(t, "POST", PathLoginVerify, map[string]any{"ceremonyId": started.CeremonyID, "credential": json.RawMessage(a.Assert(t, &started.Options))}, false)
 	if rec.Code != http.StatusUnauthorized || decode[map[string]string](t, rec)["code"] != "passkey_failed" {
 		t.Fatalf("replayed sign-in = %d %s", rec.Code, rec.Body.String())
 	}
@@ -139,7 +141,7 @@ func TestPasskeySignInStartsASession(t *testing.T) {
 
 func TestStepUpThroughTheEndpoints(t *testing.T) {
 	f := newHTTPFixture(t)
-	a := newAuthenticator(t, testRP, testOrigin)
+	a := passkeytest.NewAuthenticator(t, testRP, testOrigin)
 	f.registerPasskey(t, a)
 	status := decode[struct {
 		Recent  bool     `json:"recent"`
@@ -152,7 +154,7 @@ func TestStepUpThroughTheEndpoints(t *testing.T) {
 		CeremonyID string                       `json:"ceremonyId"`
 		Options    protocol.CredentialAssertion `json:"options"`
 	}](t, f.do(t, "POST", PathStepUpOptions, nil, true))
-	rec := f.do(t, "POST", PathStepUpVerify, map[string]any{"ceremonyId": started.CeremonyID, "credential": json.RawMessage(a.assert(t, &started.Options))}, true)
+	rec := f.do(t, "POST", PathStepUpVerify, map[string]any{"ceremonyId": started.CeremonyID, "credential": json.RawMessage(a.Assert(t, &started.Options))}, true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("step-up verify = %d %s", rec.Code, rec.Body.String())
 	}

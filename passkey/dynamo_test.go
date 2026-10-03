@@ -12,6 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/go-webauthn/webauthn/webauthn"
+
+	"github.com/nagatejakachapuram/bify-auth-kit/passkeytest"
 )
 
 // fakeDynamo evaluates exactly the expressions DynamoStore sends, so the store's conditions (single-use
@@ -27,7 +29,9 @@ func newFakeDynamo(t *testing.T) *fakeDynamo {
 	return &fakeDynamo{t: t, items: map[string]map[string]types.AttributeValue{}}
 }
 
-func itemKey(key map[string]types.AttributeValue) string { return str(key, "PK") + "|" + str(key, "SK") }
+func itemKey(key map[string]types.AttributeValue) string {
+	return str(key, "PK") + "|" + str(key, "SK")
+}
 
 func clone(item map[string]types.AttributeValue) map[string]types.AttributeValue {
 	out := map[string]types.AttributeValue{}
@@ -195,16 +199,16 @@ func TestDynamoStoreRunsTheWholeLifecycle(t *testing.T) {
 	db.session("revoked", now.Add(-time.Hour), true)
 	ctx := context.Background()
 
-	a := newAuthenticator(t, testRP, testOrigin)
+	a := passkeytest.NewAuthenticator(t, testRP, testOrigin)
 	id, creation, err := svc.BeginRegistration(ctx, user, "old")
 	if err != nil {
 		t.Fatal(err)
 	}
-	passkey, err := svc.FinishRegistration(ctx, user, "old", id, "MacBook", a.register(t, creation))
+	passkey, err := svc.FinishRegistration(ctx, user, "old", id, "MacBook", a.Register(t, creation))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if owner, err := store.PasskeyOwner(ctx, a.id); err != nil || owner != user.ID {
+	if owner, err := store.PasskeyOwner(ctx, a.ID); err != nil || owner != user.ID {
 		t.Fatalf("owner index = %q, %v", owner, err)
 	}
 	// A second account cannot claim the same credential.
@@ -213,7 +217,7 @@ func TestDynamoStoreRunsTheWholeLifecycle(t *testing.T) {
 	}
 
 	id, assertion, _ := svc.BeginLogin(ctx)
-	if owner, err := svc.FinishLogin(ctx, id, a.assert(t, assertion)); err != nil || owner != user.ID {
+	if owner, err := svc.FinishLogin(ctx, id, a.Assert(t, assertion)); err != nil || owner != user.ID {
 		t.Fatalf("sign-in = %q, %v", owner, err)
 	}
 	if _, err := store.TakeCeremony(ctx, id); !errors.Is(err, ErrNotFound) {
@@ -221,7 +225,7 @@ func TestDynamoStoreRunsTheWholeLifecycle(t *testing.T) {
 	}
 
 	id, assertion, _ = svc.BeginStepUp(ctx, user, "old")
-	if err := svc.FinishStepUp(ctx, user, "old", id, a.assert(t, assertion)); err != nil {
+	if err := svc.FinishStepUp(ctx, user, "old", id, a.Assert(t, assertion)); err != nil {
 		t.Fatal(err)
 	}
 	if recent, _ := svc.RecentlyAuthenticated(ctx, "old"); !recent {
@@ -244,7 +248,7 @@ func TestDynamoStoreRunsTheWholeLifecycle(t *testing.T) {
 	if err := svc.Delete(ctx, user.ID, passkey.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.PasskeyOwner(ctx, a.id); !errors.Is(err, ErrNotFound) {
+	if _, err := store.PasskeyOwner(ctx, a.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("owner index survived the delete: %v", err)
 	}
 }
