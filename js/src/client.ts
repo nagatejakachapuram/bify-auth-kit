@@ -1,5 +1,5 @@
 // The passkey API of a BIFY portal backend (bify-auth-kit/passkey), as typed calls.
-import { cancelled, creationOptions, credentialJSON, requestOptions, suggestedPasskeyName } from "./webauthn.js";
+import { alreadyRegistered, cancelled, createPasskey, signalAcceptedPasskeys, signalRemovedPasskey, suggestedPasskeyName, usePasskey, type PublicKeyCredentialCreationOptionsJSON, type PublicKeyCredentialRequestOptionsJSON } from "./webauthn.js";
 
 export type Passkey = { id: string; name: string; createdAt: string; lastUsedAt?: string; synced: boolean; transports?: string[] };
 /** How a person can confirm a sensitive action: their passkey, or a portal fallback such as "totp" or "email". */
@@ -25,6 +25,10 @@ export type PasskeyClientOptions = {
 
 export type PasskeyClient = ReturnType<typeof createPasskeyClient>;
 
+// go-webauthn answers with the standard WebAuthn JSON options under "publicKey".
+type CreationOptions = { publicKey: PublicKeyCredentialCreationOptionsJSON };
+type RequestOptions = { publicKey: PublicKeyCredentialRequestOptionsJSON };
+
 export function createPasskeyClient({ baseUrl, fetch: fetchImpl }: PasskeyClientOptions) {
   const base = baseUrl.replace(/\/$/, "");
   const send = (path: string, init: RequestInit = {}) => (fetchImpl ?? fetch)(`${base}${path}`, {
@@ -49,26 +53,21 @@ export function createPasskeyClient({ baseUrl, fetch: fetchImpl }: PasskeyClient
 
   const post = <T>(path: string, body?: unknown) => json<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
-  async function create(options: { publicKey: Parameters<typeof creationOptions>[0] }) {
+  // The browser prompts, through SimpleWebAuthn. Errors become messages a person can act on.
+  async function create(options: CreationOptions) {
     try {
-      const credential = await navigator.credentials.create({ publicKey: creationOptions(options.publicKey) });
-      if (!credential) throw new PasskeyError("No passkey was created.", "cancelled");
-      return credentialJSON(credential as PublicKeyCredential);
+      return await createPasskey(options.publicKey);
     } catch (error) {
-      if (error instanceof PasskeyError) throw error;
       if (cancelled(error)) throw new PasskeyError("Cancelled.", "cancelled");
-      if (error instanceof DOMException && error.name === "InvalidStateError") throw new PasskeyError("This device already has a passkey for your account.", "passkey_exists");
+      if (alreadyRegistered(error)) throw new PasskeyError("This device already has a passkey for your account.", "passkey_exists");
       throw new PasskeyError("Your device couldn't create a passkey. Try again or use another device.", "device");
     }
   }
 
-  async function get(options: { publicKey: Parameters<typeof requestOptions>[0] }) {
+  async function get(options: RequestOptions) {
     try {
-      const credential = await navigator.credentials.get({ publicKey: requestOptions(options.publicKey) });
-      if (!credential) throw new PasskeyError("No passkey was used.", "cancelled");
-      return credentialJSON(credential as PublicKeyCredential);
+      return await usePasskey(options.publicKey);
     } catch (error) {
-      if (error instanceof PasskeyError) throw error;
       if (cancelled(error)) throw new PasskeyError("Cancelled.", "cancelled");
       throw new PasskeyError("Your device couldn't use a passkey. Try again.", "device");
     }
@@ -77,12 +76,15 @@ export function createPasskeyClient({ baseUrl, fetch: fetchImpl }: PasskeyClient
   return {
     /** The account's passkeys, newest first, and how many it may hold. */
     async list(): Promise<{ passkeys: Passkey[]; limit: number }> {
-      const body = await json<{ data?: Passkey[]; limit?: number }>("/v1/auth/passkeys");
-      return { passkeys: Array.isArray(body.data) ? body.data : [], limit: body.limit ?? 10 };
+      const body = await json<{ data?: Passkey[]; limit?: number; rpId?: string; userHandle?: string }>("/v1/auth/passkeys");
+      const passkeys = Array.isArray(body.data) ? body.data : [];
+      // Keep the person's password manager in step: passkeys removed here stop being offered there.
+      signalAcceptedPasskeys(body.rpId ?? "", body.userHandle ?? "", passkeys.map((passkey) => passkey.id));
+      return { passkeys, limit: body.limit ?? 10 };
     },
     /** Creates a passkey on this device and saves it to the account. Needs a recent confirmation. */
     async register(name = suggestedPasskeyName()): Promise<Passkey> {
-      const started = await post<{ ceremonyId: string; options: { publicKey: Parameters<typeof creationOptions>[0] } }>("/v1/auth/passkeys/registration/options");
+      const started = await post<{ ceremonyId: string; options: CreationOptions }>("/v1/auth/passkeys/registration/options");
       const credential = await create(started.options);
       const saved = await post<{ data: Passkey }>("/v1/auth/passkeys/registration/verify", { ceremonyId: started.ceremonyId, name, credential });
       return saved.data;
@@ -92,13 +94,19 @@ export function createPasskeyClient({ baseUrl, fetch: fetchImpl }: PasskeyClient
     remove: (id: string) => post<void>("/v1/auth/passkeys/delete", { id }),
     /** Signs in with any passkey for this portal; the browser lets the person pick one. */
     async signIn(): Promise<void> {
-      const started = await post<{ ceremonyId: string; options: { publicKey: Parameters<typeof requestOptions>[0] } }>("/v1/auth/passkeys/login/options");
+      const started = await post<{ ceremonyId: string; options: RequestOptions }>("/v1/auth/passkeys/login/options");
       const credential = await get(started.options);
-      await post("/v1/auth/passkeys/login/verify", { ceremonyId: started.ceremonyId, credential });
+      try {
+        await post("/v1/auth/passkeys/login/verify", { ceremonyId: started.ceremonyId, credential });
+      } catch (error) {
+        // A passkey removed from the account: tell the browser so it stops offering it.
+        if (error instanceof PasskeyError && error.code === "passkey_unknown") signalRemovedPasskey(started.options.publicKey.rpId ?? location.hostname, credential.id);
+        throw error;
+      }
     },
     /** Confirms a sensitive action with one of the account's passkeys. */
     async confirm(): Promise<void> {
-      const started = await post<{ ceremonyId: string; options: { publicKey: Parameters<typeof requestOptions>[0] } }>("/v1/auth/passkeys/step-up/options");
+      const started = await post<{ ceremonyId: string; options: RequestOptions }>("/v1/auth/passkeys/step-up/options");
       const credential = await get(started.options);
       await post("/v1/auth/passkeys/step-up/verify", { ceremonyId: started.ceremonyId, credential });
     },

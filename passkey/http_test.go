@@ -237,3 +237,28 @@ func TestAnAccountWithNoWayToConfirmAddsAPasskeyOnlyRightAfterSigningIn(t *testi
 		t.Fatalf("fresh wallet-only session adding a passkey = %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestSigningInWithARemovedPasskeyTellsTheBrowser(t *testing.T) {
+	f := newHTTPFixture(t)
+	a := passkeytest.NewAuthenticator(t, testRP, testOrigin)
+	saved := f.registerPasskey(t, a)
+	if err := f.svc.Delete(t.Context(), f.user.ID, saved.ID); err != nil {
+		t.Fatal(err)
+	}
+	started := decode[struct {
+		CeremonyID string                       `json:"ceremonyId"`
+		Options    protocol.CredentialAssertion `json:"options"`
+	}](t, f.do(t, "POST", PathLoginOptions, nil, false))
+	rec := f.do(t, "POST", PathLoginVerify, map[string]any{"ceremonyId": started.CeremonyID, "credential": json.RawMessage(a.Assert(t, &started.Options))}, false)
+	if rec.Code != http.StatusUnauthorized || decode[map[string]string](t, rec)["code"] != "passkey_unknown" || f.signedIn != "" {
+		t.Fatalf("removed passkey sign-in = %d %s", rec.Code, rec.Body.String())
+	}
+	// The list carries what the browser needs to sync the person's password manager.
+	list := decode[struct {
+		RPID       string `json:"rpId"`
+		UserHandle string `json:"userHandle"`
+	}](t, f.do(t, "GET", PathList, nil, true))
+	if list.RPID != testRP || list.UserHandle == "" {
+		t.Fatalf("list sync fields = %+v", list)
+	}
+}

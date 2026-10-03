@@ -41,6 +41,8 @@ var (
 	ErrNoPasskeys = errors.New("passkey: none registered")
 	// ErrVerification means the browser's response did not verify. Its detail is never shown to users.
 	ErrVerification = errors.New("passkey: verification failed")
+	// ErrUnknownCredential is a sign-in with a passkey this portal does not have (removed, or never saved).
+	ErrUnknownCredential = errors.New("passkey: unknown credential")
 )
 
 // Config describes the relying party: the portal passkeys are bound to.
@@ -317,9 +319,11 @@ func (s *Service) FinishLogin(ctx context.Context, ceremonyID string, response [
 		return "", ErrVerification
 	}
 	var owner string
+	unknown := false
 	handler := func(rawID, userHandle []byte) (webauthn.User, error) {
 		id, err := s.store.PasskeyOwner(ctx, rawID)
 		if err != nil {
+			unknown = errors.Is(err, ErrNotFound)
 			return nil, err
 		}
 		// The authenticator names the account it was registered to; it must be this passkey's owner.
@@ -331,6 +335,12 @@ func (s *Service) FinishLogin(ctx context.Context, ceremonyID string, response [
 		return account, err
 	}
 	_, credential, err := s.wa.ValidatePasskeyLogin(handler, ceremony.Data, parsed)
+	if unknown {
+		// The browser offered a passkey this portal no longer has (removed here, or never saved). The
+		// person's device holds that passkey, so saying so reveals nothing about any account, and lets the
+		// browser hide it from their passkey list.
+		return "", ErrUnknownCredential
+	}
 	if err != nil || owner == "" {
 		return "", ErrVerification
 	}

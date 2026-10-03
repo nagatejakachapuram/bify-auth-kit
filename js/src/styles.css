@@ -1,82 +1,78 @@
-/* @bify/passkeys: styled with the design tokens both BIFY portals define, so the components look native in
-   each and follow its light and dark themes. Fallbacks keep them readable anywhere else. */
+/* @bify/passkeys: the components use each portal's own modal, button, sign-in option and alert classes, so
+   these rules only lay out the pieces the portals have no class for. Colours come from the portals' design
+   tokens (--surface, --surface-2, --text, --muted, --faint, --border, --green, --red). */
 
-.bpk-spinner { width: 15px; height: 15px; flex: 0 0 auto; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: bpk-spin .7s linear infinite; }
+.bpk-spin { animation: bpk-spin .8s linear infinite; }
 @keyframes bpk-spin { to { transform: rotate(360deg); } }
 
-.bpk-primary, .bpk-secondary, .bpk-danger { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 0 16px; border-radius: 11px; font: inherit; font-size: 13px; font-weight: 620; cursor: pointer; transition: background .15s, border-color .15s, opacity .15s, transform .2s cubic-bezier(.3, 1.4, .5, 1); }
-.bpk-primary { border: 0; background: var(--primary, #17191c); color: var(--primary-text, #fff); }
-.bpk-secondary { border: 1px solid var(--border, #0000001a); background: var(--surface, #fff); color: var(--text, #17191c); min-height: 34px; padding: 0 12px; font-size: 12.5px; }
-.bpk-secondary:hover { background: var(--surface-2, #f5f4ef); }
-.bpk-danger { border: 0; background: var(--red, #bd3948); color: #fff; min-height: 34px; padding: 0 12px; font-size: 12.5px; }
-.bpk-primary:active, .bpk-secondary:active, .bpk-danger:active { transform: scale(.98); }
-.bpk-primary:disabled, .bpk-secondary:disabled, .bpk-danger:disabled { cursor: default; opacity: .55; }
-.bpk-link { border: 0; padding: 4px 2px; background: none; color: var(--text, #17191c); font: inherit; font-size: 12.5px; font-weight: 560; cursor: pointer; }
-.bpk-link:hover { text-decoration: underline; }
-.bpk-muted { color: var(--muted, #6b7380); font-weight: 500; }
-.bpk-link:disabled { cursor: default; opacity: .5; }
+/* ── Confirm it's you ─────────────────────────────────────────────────────────────────────────── */
+.bpk-backdrop { z-index: 1000; }
+.bpk-step-up { position: relative; width: min(440px, 100%); animation: bpk-rise .28s cubic-bezier(.2, .9, .3, 1); }
+/* Higher specificity than the portals' tooltip rule (.icon-button[aria-label] { position: relative }). */
+.modal.bpk-step-up > .bpk-close { position: absolute; top: 16px; right: 16px; left: auto; z-index: 1; }
+.modal.bpk-step-up > .bpk-close[aria-label]::after { top: 50%; right: calc(100% + 8px); left: auto; transform: translateY(-50%); }
+.bpk-step-up .modal-body > .eyebrow { display: block; margin-bottom: 9px; padding-right: 46px; }
+.bpk-step-up .modal-body > h2 { padding-right: 46px; }
+.bpk-step-up .modal-body > p { margin-bottom: 18px; }
+.bpk-methods { margin: 0; }
+.bpk-methods .auth-provider { text-align: left; }
+.bpk-methods .auth-provider > span { flex: 1 1 auto; min-width: 0; }
+.bpk-methods .auth-provider > .bpk-chevron { flex: 0 0 auto; color: var(--faint, var(--muted)); }
+/* Choosing a method is a neutral control: no accent border on hover or focus. */
+.bpk-methods .auth-provider:hover, .bpk-methods .auth-provider:focus-visible { border-color: var(--border); outline: none; box-shadow: none; }
+.bpk-code-form { display: grid; gap: 10px; }
+.bpk-code-form > label { color: var(--muted); font-size: 12px; font-weight: 600; }
+.bpk-code-field { height: 48px; padding: 0 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); color: var(--text); font: inherit; font-size: 20px; font-weight: 600; letter-spacing: .4em; text-align: center; }
+.bpk-resend { justify-self: start; }
+.bpk-alert { width: 100%; margin-top: 14px; }
+.bpk-confirmed { display: inline-grid; place-items: center; width: 44px; height: 44px; margin-bottom: 14px; border-radius: 50%; background: color-mix(in srgb, var(--green, #16805d) 14%, transparent); color: var(--green, #16805d); animation: bpk-pop .4s cubic-bezier(.3, 1.5, .5, 1); }
+.bpk-step-up .modal-footer { justify-content: flex-end; }
+@keyframes bpk-rise { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+@keyframes bpk-pop { from { opacity: 0; transform: scale(.6); } }
 
-.bpk-error { margin: 10px 0 0; color: var(--red, #bd3948); font-size: 12.5px; line-height: 1.45; }
-.bpk-success { display: flex; align-items: center; gap: 7px; margin: 10px 0 0; color: var(--green, #16805d); font-size: 12.5px; }
-.bpk-note, .bpk-empty { margin: 10px 0 0; color: var(--muted, #6b7380); font-size: 12.5px; line-height: 1.5; }
-
-/* Sign-in option (when no portal class is passed) */
-.bpk-option { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 58px; padding: 11px 13px; border: 1px solid var(--border, #0000001a); border-radius: 11px; background: var(--surface, #fff); color: var(--text, #17191c); font: inherit; text-align: left; cursor: pointer; }
-.bpk-option > span { display: grid; flex: 1; gap: 3px; }
-.bpk-option strong { font-size: 13px; }
-.bpk-option small { color: var(--muted, #6b7380); font-size: 11px; }
-
-/* Security settings */
-.bpk-manager { display: grid; gap: 4px; }
-.bpk-manager-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-.bpk-manager-head h2 { margin: 0 0 5px; color: var(--text, #17191c); font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
-.bpk-manager-head p { max-width: 520px; margin: 0; color: var(--muted, #6b7380); font-size: 12.5px; line-height: 1.55; }
+/* ── Security settings ────────────────────────────────────────────────────────────────────────── */
+.bpk-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.bpk-head h2 { margin: 0; color: var(--text); font-size: 15px; letter-spacing: -.015em; }
+.bpk-head p { max-width: 520px; margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .bpk-add { flex: 0 0 auto; }
-.bpk-list { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
-.bpk-row { display: flex; align-items: center; gap: 12px; min-height: 62px; padding: 11px 13px; border: 1px solid var(--border, #0000001a); border-radius: 13px; background: var(--surface, #fff); }
-.bpk-row-icon { display: grid; place-items: center; flex: 0 0 auto; width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2, #f5f4ef); color: var(--text, #17191c); }
-.bpk-row-copy { display: grid; flex: 1; gap: 3px; min-width: 0; }
-.bpk-row-copy strong { overflow: hidden; color: var(--text, #17191c); font-size: 13.5px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
-.bpk-row-copy span { color: var(--muted, #6b7380); font-size: 11.5px; line-height: 1.4; }
-.bpk-row-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
-.bpk-rename { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
-.bpk-rename input { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border, #00000024); border-radius: 9px; background: var(--surface, #fff); color: var(--text, #17191c); font: inherit; font-size: 13px; outline: none; }
-.bpk-skeleton { height: 62px; margin-top: 14px; border-radius: 13px; background: linear-gradient(90deg, var(--surface-2, #f5f4ef), var(--surface-3, #eeede7), var(--surface-2, #f5f4ef)); background-size: 200% 100%; animation: bpk-shimmer 1.3s ease-in-out infinite; }
+.bpk-body { display: grid; gap: 12px; }
+.bpk-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.bpk-row, .bpk-empty { display: flex; align-items: center; gap: 12px; padding: 14px 15px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.bpk-row-icon { display: grid; place-items: center; flex: 0 0 auto; width: 36px; height: 36px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--muted); }
+.bpk-row-copy, .bpk-empty > div { display: grid; flex: 1 1 auto; gap: 3px; min-width: 0; }
+.bpk-row-copy strong, .bpk-empty strong { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.bpk-row-copy span, .bpk-empty span { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.bpk-tag { flex: 0 0 auto; padding: 2px 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--muted) !important; font-size: 10.5px !important; font-weight: 600; letter-spacing: .01em; }
+.bpk-row-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.bpk-ask { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.bpk-rename { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+.bpk-input { flex: 1 1 auto; min-width: 0; height: 36px; padding: 0 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+.bpk-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.bpk-success { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--green, #16805d); font-size: 12.5px; font-weight: 550; }
+.bpk-body > .bpk-alert { margin-top: 0; }
+.bpk-skeleton { height: 66px; border-radius: 12px; background: linear-gradient(90deg, var(--surface-2), var(--surface-3, var(--surface-2)), var(--surface-2)); background-size: 200% 100%; animation: bpk-shimmer 1.3s ease-in-out infinite; }
 @keyframes bpk-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
-/* Confirm it's you */
-.bpk-overlay { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; background: #0b0d1299; backdrop-filter: blur(6px); animation: bpk-fade .18s ease-out; }
-.bpk-dialog { width: min(400px, 100%); padding: 26px 24px 18px; border: 1px solid var(--border, #0000001a); border-radius: 20px; background: var(--surface, #fff); color: var(--text, #17191c); box-shadow: 0 24px 80px #00000038; text-align: center; animation: bpk-rise .32s cubic-bezier(.2, 1.2, .4, 1); }
-.bpk-dialog-icon { display: inline-grid; place-items: center; width: 52px; height: 52px; margin-bottom: 12px; border-radius: 16px; background: var(--surface-2, #f5f4ef); color: var(--text, #17191c); transition: background .2s, color .2s; }
-.bpk-dialog-icon.bpk-done { border-radius: 50%; background: var(--green, #16805d); color: #fff; animation: bpk-pop .4s cubic-bezier(.3, 1.6, .5, 1); }
-.bpk-dialog h2 { margin: 0 0 7px; font-size: 19px; font-weight: 680; letter-spacing: -.02em; }
-.bpk-dialog-copy { margin: 0 0 16px; color: var(--muted, #6b7380); font-size: 13px; line-height: 1.55; }
-.bpk-dialog > .bpk-primary { width: 100%; min-height: 46px; font-size: 14px; }
-.bpk-code { display: grid; gap: 10px; }
-.bpk-code input { height: 48px; border: 1px solid var(--border, #00000024); border-radius: 12px; background: var(--surface-2, #f5f4ef); color: var(--text, #17191c); font: inherit; font-size: 22px; font-weight: 600; letter-spacing: .35em; text-align: center; outline: none; }
-.bpk-code .bpk-primary { min-height: 46px; }
-.bpk-dialog-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; margin-top: 14px; }
-@keyframes bpk-fade { from { opacity: 0; } }
-@keyframes bpk-rise { from { opacity: 0; transform: translateY(12px) scale(.98); } }
-@keyframes bpk-pop { from { transform: scale(.6); } }
-
-@media (max-width: 560px) {
-  .bpk-row { flex-wrap: wrap; }
-  .bpk-row-actions { width: 100%; justify-content: flex-end; }
-  .bpk-overlay { align-items: end; padding: 0; }
-  .bpk-dialog { width: 100%; padding-bottom: max(18px, env(safe-area-inset-bottom)); border-radius: 20px 20px 0 0; animation-name: bpk-sheet; }
-  @keyframes bpk-sheet { from { transform: translateY(100%); } }
-}
-@media (prefers-reduced-motion: reduce) {
-  .bpk-spinner, .bpk-skeleton, .bpk-overlay, .bpk-dialog, .bpk-dialog-icon.bpk-done { animation: none; }
-}
-
-/* Fields stay neutral when focused: no outline, ring or coloured border. Host portals style every
+/* Fields stay neutral when focused: no outline, ring or coloured border. The portals style every
    input:focus-visible, and their --border-strong is an accent colour, so these rules win on purpose. */
-.bpk-rename input:focus, .bpk-rename input:focus-visible,
-.bpk-code input:focus, .bpk-code input:focus-visible {
+.bpk-input:focus, .bpk-input:focus-visible, .bpk-code-field:focus, .bpk-code-field:focus-visible {
   outline: none !important;
   box-shadow: none !important;
-  border-color: var(--border, #00000024) !important;
+  border-color: var(--border) !important;
+  background: var(--surface-3, var(--surface-2));
 }
-.bpk-code input:focus { background: var(--surface-3, var(--surface-2, #efede6)); }
+
+@media (max-width: 720px) {
+  .bpk-head { flex-direction: column; align-items: stretch; }
+  /* Icon and name on the first line, actions full width beneath, like the portal's identity rows. */
+  .bpk-row { display: grid; grid-template-columns: 36px minmax(0, 1fr); column-gap: 12px; row-gap: 12px; }
+  .bpk-row-copy strong { white-space: normal; }
+  .bpk-row-actions, .bpk-rename { grid-column: 1 / -1; }
+  .bpk-row-actions > :is(button, .ghost-button, .danger-button) { flex: 1 1 0; }
+  .bpk-ask { flex: 1 0 100%; text-align: left; }
+  .bpk-row-actions { flex-wrap: wrap; }
+  .modal.bpk-step-up > .bpk-close { top: 12px; right: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bpk-spin, .bpk-skeleton, .bpk-step-up, .bpk-confirmed { animation: none; }
+}

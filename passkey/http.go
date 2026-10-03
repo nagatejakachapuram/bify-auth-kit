@@ -173,7 +173,9 @@ func (s *Service) handleList(hooks Hooks) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, http.StatusOK, map[string]any{"data": passkeys, "limit": s.cfg.MaxPerUser})
+		// rpId and userHandle let the browser keep the person's password manager in step with this list
+		// (WebAuthn signalAllAcceptedCredentials), so a removed passkey disappears there too.
+		writeJSON(w, http.StatusOK, map[string]any{"data": passkeys, "limit": s.cfg.MaxPerUser, "rpId": s.cfg.RPID, "userHandle": encodeID([]byte(user.ID))})
 	}
 }
 
@@ -302,6 +304,12 @@ func (s *Service) handleLoginVerify(hooks Hooks) http.HandlerFunc {
 			return
 		}
 		userID, err := s.FinishLogin(r.Context(), body.CeremonyID, body.Credential)
+		if errors.Is(err, ErrUnknownCredential) {
+			// The browser offered a passkey this portal no longer has; the client tells the browser so
+			// it stops offering it (WebAuthn signalUnknownCredential).
+			writeError(w, http.StatusUnauthorized, "This passkey was removed from your account. Use another passkey or sign-in method.", "passkey_unknown")
+			return
+		}
 		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrVerification) {
 			// One answer for an unknown, removed or forged passkey: nothing to learn about accounts.
 			writeError(w, http.StatusUnauthorized, "This passkey could not be used to sign in. Try again, or use another sign-in method.", "passkey_failed")

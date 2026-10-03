@@ -2,40 +2,32 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import {
-  base64urlToBuffer, bufferToBase64url, createPasskeyClient, creationOptions, credentialJSON, PasskeyError,
-  requestOptions, StepUpDialog, stepUpMethods, suggestedPasskeyName, withStepUp,
-} from "../dist/index.js";
+import { createPasskeyClient, PasskeyError, StepUpDialog, stepUpMethods, suggestedPasskeyName, withStepUp } from "../dist/index.js";
 
 const json = (status, body) => new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+const bytes = (...b) => new Uint8Array(b).buffer;
 
-test("base64url round-trips arbitrary bytes", () => {
-  const bytes = new Uint8Array([0, 1, 2, 250, 251, 252, 253, 254, 255, 62, 63]);
-  const encoded = bufferToBase64url(bytes);
-  assert.doesNotMatch(encoded, /[+/=]/);
-  assert.deepEqual(new Uint8Array(base64urlToBuffer(encoded)), bytes);
-});
+// A browser with WebAuthn: PublicKeyCredential (with the Signal API) and navigator.credentials.
+function browser(t, credentials) {
+  const signals = [];
+  const previous = { window: globalThis.window, navigator: globalThis.navigator, PublicKeyCredential: globalThis.PublicKeyCredential };
+  const PublicKeyCredential = Object.assign(function PublicKeyCredential() {}, {
+    signalUnknownCredential: async (options) => { signals.push(["unknown", options]); },
+    signalAllAcceptedCredentials: async (options) => { signals.push(["accepted", options]); },
+  });
+  globalThis.PublicKeyCredential = PublicKeyCredential;
+  globalThis.window = { PublicKeyCredential, location: { hostname: "account.bify.io" } };
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { credentials, userAgent: "" } });
+  t.after(() => {
+    globalThis.window = previous.window;
+    globalThis.PublicKeyCredential = previous.PublicKeyCredential;
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: previous.navigator });
+  });
+  return signals;
+}
 
-test("server options become browser options when the browser has no JSON helpers", () => {
-  const creation = creationOptions({ challenge: "AAEC", rp: { id: "account.bify.io", name: "BIFY Account" }, user: { id: "dXNlcg", name: "a@b.c", displayName: "A" }, pubKeyCredParams: [{ type: "public-key", alg: -7 }], excludeCredentials: [{ type: "public-key", id: "AQI", transports: ["internal"] }] });
-  assert.deepEqual(new Uint8Array(creation.challenge), new Uint8Array([0, 1, 2]));
-  assert.equal(new TextDecoder().decode(creation.user.id), "user");
-  assert.deepEqual(new Uint8Array(creation.excludeCredentials[0].id), new Uint8Array([1, 2]));
-  assert.equal(creation.rp.id, "account.bify.io");
-  const request = requestOptions({ challenge: "AAEC", rpId: "account.bify.io", allowCredentials: [{ type: "public-key", id: "AQI" }], userVerification: "required" });
-  assert.deepEqual(new Uint8Array(request.allowCredentials[0].id), new Uint8Array([1, 2]));
-  assert.equal(request.userVerification, "required");
-});
-
-test("a browser answer becomes the JSON the server verifies", () => {
-  const buf = (...b) => new Uint8Array(b).buffer;
-  const assertion = credentialJSON({ id: "AQI", rawId: buf(1, 2), type: "public-key", authenticatorAttachment: "platform", getClientExtensionResults: () => ({}),
-    response: { clientDataJSON: buf(3), authenticatorData: buf(4), signature: buf(5), userHandle: buf(6) } });
-  assert.deepEqual(assertion.response, { clientDataJSON: "Aw", authenticatorData: "BA", signature: "BQ", userHandle: "Bg" });
-  const attestation = credentialJSON({ id: "AQI", rawId: buf(1, 2), type: "public-key", getClientExtensionResults: () => ({}),
-    response: { clientDataJSON: buf(3), attestationObject: buf(7), getTransports: () => ["internal"] } });
-  assert.deepEqual(attestation.response, { clientDataJSON: "Aw", attestationObject: "Bw", transports: ["internal"] });
-});
+const assertion = () => ({ id: "AQI", rawId: bytes(1, 2), type: "public-key", authenticatorAttachment: "platform", getClientExtensionResults: () => ({}),
+  response: { clientDataJSON: bytes(1), authenticatorData: bytes(2), signature: bytes(3), userHandle: bytes(4) } });
 
 test("passkeys get a friendly default name for the device they were made on", () => {
   assert.equal(suggestedPasskeyName("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)"), "iPhone");
@@ -53,24 +45,41 @@ test("the client signs in through the browser and the server's two steps", async
     if (url.endsWith("/login/verify")) return json(200, { status: "authenticated" });
     return json(404, {});
   };
-  const original = globalThis.navigator;
-  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { credentials: { get: async ({ publicKey }) => {
+  browser(t, { get: async ({ publicKey }) => {
     assert.deepEqual(new Uint8Array(publicKey.challenge), new Uint8Array([0, 1, 2]));
-    return { id: "AQI", rawId: new Uint8Array([1, 2]).buffer, type: "public-key", getClientExtensionResults: () => ({}), response: { clientDataJSON: new Uint8Array([1]).buffer, authenticatorData: new Uint8Array([2]).buffer, signature: new Uint8Array([3]).buffer, userHandle: null } };
-  } } } });
-  t.after(() => Object.defineProperty(globalThis, "navigator", { configurable: true, value: original }));
+    assert.equal(publicKey.userVerification, "required");
+    return assertion();
+  } });
   await createPasskeyClient({ baseUrl: "https://auth.example/", fetch }).signIn();
   assert.equal(calls[0][0], "https://auth.example/v1/auth/passkeys/login/options");
   assert.equal(calls[0][3], "include", "the session cookie must be sent");
   assert.equal(calls[1][2].ceremonyId, "c1");
   assert.equal(calls[1][2].credential.id, "AQI");
+  assert.deepEqual(calls[1][2].credential.response, { authenticatorData: "Ag", clientDataJSON: "AQ", signature: "Aw", userHandle: "BA" });
+});
+
+test("signing in with a passkey removed from the account tells the browser to stop offering it", async (t) => {
+  const fetch = async (url) => url.endsWith("/login/options")
+    ? json(200, { ceremonyId: "c1", options: { publicKey: { challenge: "AAEC", rpId: "account.bify.io" } } })
+    : json(401, { error: "This passkey was removed from your account.", code: "passkey_unknown" });
+  const signals = browser(t, { get: async () => assertion() });
+  await assert.rejects(createPasskeyClient({ baseUrl: "", fetch }).signIn(), (error) => error.code === "passkey_unknown");
+  await new Promise(setImmediate);
+  assert.deepEqual(signals, [["unknown", { rpId: "account.bify.io", credentialId: "AQI" }]]);
+});
+
+test("listing passkeys keeps the browser's password manager in step", async (t) => {
+  const signals = browser(t, {});
+  const fetch = async () => json(200, { data: [{ id: "AQI", name: "iPhone", createdAt: "2026-10-01T00:00:00Z", synced: true }], limit: 10, rpId: "account.bify.io", userHandle: "dXNlcg" });
+  const { passkeys } = await createPasskeyClient({ baseUrl: "", fetch }).list();
+  assert.equal(passkeys.length, 1);
+  await new Promise(setImmediate);
+  assert.deepEqual(signals, [["accepted", { rpId: "account.bify.io", userId: "dXNlcg", allAcceptedCredentialIds: ["AQI"] }]]);
 });
 
 test("a dismissed browser prompt is reported as cancelled, not as an error", async (t) => {
-  const fetch = async () => json(200, { ceremonyId: "c1", options: { publicKey: { challenge: "AAEC" } } });
-  const original = globalThis.navigator;
-  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { credentials: { get: async () => { throw new DOMException("The operation either timed out or was not allowed.", "NotAllowedError"); } } } });
-  t.after(() => Object.defineProperty(globalThis, "navigator", { configurable: true, value: original }));
+  const fetch = async () => json(200, { ceremonyId: "c1", options: { publicKey: { challenge: "AAEC", rpId: "account.bify.io" } } });
+  browser(t, { get: async () => { throw new DOMException("The operation either timed out or was not allowed.", "NotAllowedError"); } });
   await assert.rejects(createPasskeyClient({ baseUrl: "", fetch }).confirm(), (error) => error instanceof PasskeyError && error.cancelled);
 });
 
@@ -98,21 +107,19 @@ test("withStepUp confirms once and retries a sensitive request", async () => {
   assert.equal(tries, 1);
 });
 
-test("the confirmation dialog offers the passkey first and the portal's fallbacks", () => {
-  const original = globalThis.window;
-  globalThis.window = { PublicKeyCredential: function () {} };
-  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { credentials: {} } });
-  try {
-    const html = renderToStaticMarkup(createElement(StepUpDialog, { client: {}, methods: ["passkey", "totp"], fallbacks: { totp: async () => {} }, onConfirmed() {}, onCancel() {} }));
-    assert.match(html, /Confirm it(&#x27;|')s you/);
-    assert.match(html, /Use passkey/);
-    assert.match(html, /Use authenticator code instead/);
-    const codeOnly = renderToStaticMarkup(createElement(StepUpDialog, { client: {}, methods: ["totp"], fallbacks: { totp: async () => {} }, onConfirmed() {}, onCancel() {} }));
-    assert.match(codeOnly, /authenticator app/);
-    assert.doesNotMatch(codeOnly, /Use passkey/);
-    const nothing = renderToStaticMarkup(createElement(StepUpDialog, { client: {}, methods: ["totp"], fallbacks: {}, onConfirmed() {}, onCancel() {} }));
-    assert.match(nothing, /Add a passkey or an authenticator app/);
-  } finally {
-    globalThis.window = original;
-  }
+test("the confirmation dialog lists the ways this account can confirm, passkey first", (t) => {
+  browser(t, {});
+  const render = (methods, fallbacks, CodeInput) => renderToStaticMarkup(createElement(StepUpDialog, { client: {}, methods, fallbacks, CodeInput, onConfirmed() {}, onCancel() {} }));
+  const all = render(["passkey", "email", "totp"], { totp: async () => {}, email: { request: async () => {}, verify: async () => {} } });
+  assert.match(all, /class="modal-backdrop bpk-backdrop"/, "uses the portal's modal");
+  assert.match(all, /Confirm it(&#x27;|')s you/);
+  const order = ["Use a passkey", "Email me a code", "Use your authenticator app"].map((label) => all.indexOf(label));
+  assert.ok(order.every((index) => index > 0) && order[0] < order[1] && order[1] < order[2], "passkey, then email, then app");
+  // Only an authenticator app: straight to the code, in the portal's own code field.
+  const codeOnly = render(["totp"], { totp: async () => {} }, ({ id }) => createElement("div", { "data-portal-code": id }));
+  assert.match(codeOnly, /Enter your code/);
+  assert.match(codeOnly, /data-portal-code=/);
+  assert.doesNotMatch(codeOnly, /Use a passkey/);
+  // A method the portal has no fallback for is not offered.
+  assert.match(render(["totp"], {}), /Add a passkey or an authenticator app/);
 });

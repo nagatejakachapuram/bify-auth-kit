@@ -1,17 +1,15 @@
 "use client";
-// Passkey UI shared by the BIFY developer portal and BIFY Account: a sign-in button, the Security
-// settings manager, and the "Confirm it's you" dialog for sensitive actions. Styled by styles.css with the
-// design tokens both portals define (--surface, --text, --muted, --border, --green, --red, ...).
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+// Passkey UI shared by the BIFY developer portal and BIFY Account: a sign-in option, the Security settings
+// list, and the "Confirm it's you" dialog for sensitive actions. It is built from the classes both portals
+// already style (modal, modal-body, modal-footer, auth-provider, primary-button, ghost-button,
+// danger-button, eyebrow, auth-error) and their lucide icons, so it reads as part of each portal rather than
+// an embedded widget. styles.css only adds layout for the pieces the portals have no class for.
+import { ChevronRight, CircleCheck, KeyRound, Laptop, LoaderCircle, Mail, Pencil, ScanFace, ShieldAlert, ShieldCheck, Smartphone, Tablet, Trash2, X, type LucideIcon } from "lucide-react";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ComponentType, type FormEvent, type ReactNode } from "react";
 import { PasskeyError, withStepUp, type Passkey, type PasskeyClient, type StepUpMethod } from "./client.js";
-import { passkeysSupported, suggestedPasskeyName } from "./webauthn.js";
+import { cancelPasskeyPrompt, passkeysSupported, suggestedPasskeyName } from "./webauthn.js";
 
-// ── Icons (inline so the package has no icon dependency) ─────────────────────────────────────────
-const svg = (path: ReactNode, size = 17) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{path}</svg>;
-export const PasskeyIcon = ({ size = 17 }: { size?: number }) => svg(<><circle cx="10" cy="7.5" r="3.5" /><path d="M3.5 19.5c.6-3.4 3.2-5.5 6.5-5.5 1.1 0 2.1.2 3 .7" /><path d="M18 13.5a2.5 2.5 0 1 0-2 2.45V20l1 1 1.5-1.5-1-1 1-1-1-1a2.5 2.5 0 0 0 .5-2.95" /></>, size);
-const ChevronIcon = () => svg(<path d="m9 6 6 6-6 6" />, 15);
-const CheckIcon = () => svg(<path d="M20 6 9 17l-5-5" />, 14);
-const SpinnerIcon = () => <span className="bpk-spinner" aria-hidden="true" />;
+const Spinner = ({ size = 15 }: { size?: number }) => <LoaderCircle className="bpk-spin" size={size} aria-hidden="true" />;
 
 function relative(iso: string | undefined, now = Date.now()): string {
   if (!iso) return "";
@@ -25,6 +23,9 @@ function relative(iso: string | undefined, now = Date.now()): string {
   return new Date(then).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
+const messageOf = (caught: unknown, fallback: string) => caught instanceof Error && caught.message ? caught.message : fallback;
+const isCancelled = (caught: unknown) => caught instanceof PasskeyError && caught.cancelled;
+
 // ── Step-up ("Confirm it's you") ─────────────────────────────────────────────────────────────────
 
 /** Fallbacks the portal verifies itself for people without a passkey. Each resolves once confirmed. */
@@ -32,6 +33,9 @@ export type StepUpFallbacks = {
   totp?: (code: string) => Promise<void>;
   email?: { request: () => Promise<void>; verify: (code: string) => Promise<void> };
 };
+
+/** The portal's own 6-digit code field, so the dialog's code entry is the one people already know. */
+export type CodeInputProps = { id: string; value: string; onChange: (value: string) => void; disabled?: boolean; autoFocus?: boolean };
 
 type StepUpContextValue = {
   /** Asks the person to confirm it's them (skipped if they did recently). Rejects with a cancelled PasskeyError if they close it. */
@@ -49,7 +53,7 @@ export function useStepUp(): StepUpContextValue {
 
 type Pending = { methods: StepUpMethod[]; resolve: () => void; reject: (error: unknown) => void };
 
-export function StepUpProvider({ client, fallbacks = {}, children }: { client: PasskeyClient; fallbacks?: StepUpFallbacks; children: ReactNode }) {
+export function StepUpProvider({ client, fallbacks = {}, CodeInput, children }: { client: PasskeyClient; fallbacks?: StepUpFallbacks; CodeInput?: ComponentType<CodeInputProps>; children: ReactNode }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const queue = useRef<Promise<void> | null>(null);
 
@@ -77,97 +81,134 @@ export function StepUpProvider({ client, fallbacks = {}, children }: { client: P
 
   return <StepUpContext.Provider value={value}>
     {children}
-    {pending ? <StepUpDialog client={client} methods={pending.methods} fallbacks={fallbacks}
+    {pending ? <StepUpDialog client={client} methods={pending.methods} fallbacks={fallbacks} CodeInput={CodeInput}
       onConfirmed={() => { pending.resolve(); setPending(null); }}
       onCancel={() => { pending.reject(new PasskeyError("Cancelled.", "cancelled")); setPending(null); }} /> : null}
   </StepUpContext.Provider>;
 }
 
-export function StepUpDialog({ client, methods, fallbacks, onConfirmed, onCancel }: { client: PasskeyClient; methods: StepUpMethod[]; fallbacks: StepUpFallbacks; onConfirmed: () => void; onCancel: () => void }) {
+type CodeMethod = "totp" | "email";
+
+const METHOD_COPY: Record<"passkey" | CodeMethod, { icon: LucideIcon; title: string; detail: string }> = {
+  passkey: { icon: ScanFace, title: "Use a passkey", detail: "Face ID, fingerprint or security key" },
+  email: { icon: Mail, title: "Email me a code", detail: "We'll send a 6-digit code to your email" },
+  totp: { icon: Smartphone, title: "Use your authenticator app", detail: "Enter the 6-digit code from the app" },
+};
+
+export function StepUpDialog({ client, methods, fallbacks, CodeInput, onConfirmed, onCancel }: { client: PasskeyClient; methods: StepUpMethod[]; fallbacks: StepUpFallbacks; CodeInput?: ComponentType<CodeInputProps>; onConfirmed: () => void; onCancel: () => void }) {
+  const ids = useId();
   const canPasskey = methods.includes("passkey") && passkeysSupported();
-  const codeMethods = methods.filter((m): m is "totp" | "email" => (m === "totp" && !!fallbacks.totp) || (m === "email" && !!fallbacks.email));
-  const [mode, setMode] = useState<"passkey" | "totp" | "email">(canPasskey ? "passkey" : codeMethods[0] ?? "passkey");
+  const codeMethods = methods.filter((m): m is CodeMethod => (m === "totp" && !!fallbacks.totp) || (m === "email" && !!fallbacks.email));
+  const options: Array<"passkey" | CodeMethod> = [...(canPasskey ? ["passkey" as const] : []), ...codeMethods];
+  // With only an authenticator app there is nothing to choose: go straight to the code.
+  const [view, setView] = useState<"choose" | CodeMethod>(options.length === 1 && options[0] === "totp" ? "totp" : "choose");
   const [code, setCode] = useState("");
-  const [emailSent, setEmailSent] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"" | "passkey" | "email" | "code">("");
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onCancel(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+  const close = useCallback(() => {
+    if (busy === "passkey") cancelPasskeyPrompt();
+    onCancel();
   }, [busy, onCancel]);
 
-  async function attempt(action: () => Promise<void>) {
-    setBusy(true);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && busy !== "code" && busy !== "email") close(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, close]);
+
+  async function finish(kind: "passkey" | "code", action: () => Promise<void>) {
+    setBusy(kind);
     setError("");
     try {
       await action();
       setDone(true);
-      window.setTimeout(onConfirmed, 450); // a beat to see it worked before the action continues
+      window.setTimeout(onConfirmed, 600); // a beat to see it worked before the action carries on
     } catch (caught) {
-      if (caught instanceof PasskeyError && caught.cancelled) setError("");
-      else setError(caught instanceof Error ? caught.message : "That didn't work. Try again.");
+      if (!isCancelled(caught)) setError(messageOf(caught, "That didn't work. Try again."));
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   }
 
-  async function requestEmailCode() {
-    setBusy(true);
+  async function sendEmail() {
+    setBusy("email");
     setError("");
     try {
       await fallbacks.email!.request();
-      setEmailSent(true);
+      setCode("");
+      setView("email");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "We couldn't send a code. Try again.");
+      setError(messageOf(caught, "We couldn't send a code. Try again."));
     } finally {
-      setBusy(false);
+      setBusy("");
     }
+  }
+
+  function choose(option: "passkey" | CodeMethod) {
+    if (option === "passkey") void finish("passkey", () => client.confirm());
+    else if (option === "email") void sendEmail();
+    else { setError(""); setCode(""); setView("totp"); }
   }
 
   const submitCode = (event: FormEvent) => {
     event.preventDefault();
-    const clean = code.replace(/\s/g, "");
-    if (!/^\d{6}$/.test(clean)) { setError("Enter the 6-digit code."); return; }
-    void attempt(() => mode === "totp" ? fallbacks.totp!(clean) : fallbacks.email!.verify(clean));
+    const clean = code.replace(/\D/g, "");
+    if (clean.length !== 6) { setError("Enter the 6-digit code."); return; }
+    void finish("code", () => view === "totp" ? fallbacks.totp!(clean) : fallbacks.email!.verify(clean));
   };
 
-  const nothingAvailable = !canPasskey && codeMethods.length === 0;
+  const formId = `${ids}-code`;
+  const titleId = `${ids}-title`;
+  const inCode = view !== "choose";
+  const canGoBack = inCode && options.length > 1;
+  const locked = busy === "code" || busy === "email" || done;
 
-  return <div className="bpk-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onCancel(); }}>
-    <div className="bpk-dialog" role="dialog" aria-modal="true" aria-labelledby="bpk-step-up-title">
-      <span className={`bpk-dialog-icon ${done ? "bpk-done" : ""}`}>{done ? <CheckIcon /> : <PasskeyIcon size={22} />}</span>
-      <h2 id="bpk-step-up-title">{done ? "Confirmed" : "Confirm it's you"}</h2>
-      {done ? <p className="bpk-dialog-copy">You won't be asked again for a few minutes.</p> : <>
-        <p className="bpk-dialog-copy">
-          {mode === "passkey" ? "This action is protected. Use your passkey to continue: Face ID, a fingerprint or your device PIN."
-            : mode === "totp" ? "This action is protected. Enter the 6-digit code from your authenticator app."
-            : emailSent ? "We emailed you a 6-digit code. Enter it to continue." : "This action is protected. We'll email you a 6-digit code to confirm it's you."}
-        </p>
-        {nothingAvailable ? <p className="bpk-dialog-copy">Add a passkey or an authenticator app in Security settings to do this.</p> : null}
-        {mode === "passkey" && canPasskey ? <button type="button" className="bpk-primary" disabled={busy} autoFocus onClick={() => void attempt(() => client.confirm())}>
-          {busy ? <SpinnerIcon /> : <PasskeyIcon />}{busy ? "Waiting for your passkey…" : "Use passkey"}
+  let title = "Confirm it's you";
+  let copy = options.length > 1 ? "This change is protected. Choose how you'd like to confirm it's you."
+    : options[0] === "passkey" ? "This change is protected. Confirm with your passkey to continue."
+    : options[0] === "email" ? "This change is protected. We'll email you a 6-digit code to confirm it's you."
+    : "This change is protected.";
+  if (view === "email") { title = "Check your email"; copy = "We sent a 6-digit code to your email address. It expires in 10 minutes."; }
+  if (view === "totp") { title = "Enter your code"; copy = "Open your authenticator app and enter the 6-digit code for BIFY."; }
+  if (done) { title = "You're confirmed"; copy = "Continuing with your change."; }
+
+  return <div className="modal-backdrop bpk-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !locked) close(); }}>
+    <section className="modal bpk-step-up" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      {done ? null : <button type="button" className="icon-button bpk-close" aria-label="Close" disabled={locked} onClick={close}><X size={16} /></button>}
+      <div className="modal-body">
+        {done ? <span className="bpk-confirmed" aria-hidden="true"><CircleCheck size={22} /></span> : <span className="eyebrow">Security check</span>}
+        <h2 id={titleId}>{title}</h2>
+        <p>{copy}</p>
+        {done ? null : !inCode ? <div className="auth-actions bpk-methods">
+          {options.map((option, index) => {
+            const { icon: Icon, title: label, detail } = METHOD_COPY[option];
+            const working = busy === option;
+            return <button key={option} type="button" className="auth-provider" disabled={!!busy} autoFocus={index === 0} onClick={() => choose(option)}>
+              {working ? <Spinner size={17} /> : <Icon size={17} />}
+              <span><strong>{working ? option === "passkey" ? "Waiting for your passkey…" : "Sending your code…" : label}</strong><small>{detail}</small></span>
+              <ChevronRight className="bpk-chevron" size={15} />
+            </button>;
+          })}
+          {options.length === 0 ? <p className="bpk-note">Add a passkey or an authenticator app in Security settings to make this change.</p> : null}
+        </div> : <form id={formId} className="bpk-code-form" onSubmit={submitCode}>
+          <label htmlFor={`${formId}-field`}>Verification code</label>
+          {CodeInput ? <CodeInput id={`${formId}-field`} value={code} onChange={(value) => { setCode(value); setError(""); }} disabled={locked} autoFocus />
+            : <input id={`${formId}-field`} className="bpk-code-field" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="000000" value={code} autoFocus disabled={locked}
+              onChange={(event) => { setCode(event.target.value.replace(/\D/g, "")); setError(""); }} />}
+          {view === "email" ? <button type="button" className="text-button bpk-resend" disabled={locked} onClick={() => void sendEmail()}>Send a new code</button> : null}
+        </form>}
+        {error ? <div className="auth-error bpk-alert" role="alert"><ShieldAlert size={15} /><span>{error}</span></div> : null}
+      </div>
+      {done ? null : <div className="modal-footer">
+        {canGoBack ? <button type="button" className="ghost-button" disabled={locked} onClick={() => { setView("choose"); setError(""); }}>Back</button>
+          : <button type="button" className="ghost-button" disabled={locked} onClick={close}>Cancel</button>}
+        {inCode ? <button type="submit" form={formId} className="primary-button" disabled={locked || code.replace(/\D/g, "").length !== 6}>
+          {busy === "code" ? <Spinner size={14} /> : <ShieldCheck size={14} />}{busy === "code" ? "Confirming…" : "Confirm"}
         </button> : null}
-        {mode === "email" && !emailSent ? <button type="button" className="bpk-primary" disabled={busy} autoFocus onClick={() => void requestEmailCode()}>
-          {busy ? <SpinnerIcon /> : null}Email me a code
-        </button> : null}
-        {(mode === "totp" || (mode === "email" && emailSent)) ? <form className="bpk-code" onSubmit={submitCode}>
-          <input inputMode="numeric" autoComplete="one-time-code" maxLength={7} placeholder="000000" aria-label="6-digit code" value={code} autoFocus disabled={busy}
-            onChange={(event) => setCode(event.target.value.replace(/[^\d ]/g, ""))} />
-          <button type="submit" className="bpk-primary" disabled={busy || code.replace(/\s/g, "").length !== 6}>{busy ? <SpinnerIcon /> : null}Confirm</button>
-        </form> : null}
-        {error ? <p className="bpk-error" role="alert">{error}</p> : null}
-        <div className="bpk-dialog-links">
-          {mode !== "passkey" && canPasskey ? <button type="button" className="bpk-link" disabled={busy} onClick={() => { setMode("passkey"); setError(""); }}>Use passkey instead</button> : null}
-          {codeMethods.filter((m) => m !== mode).map((m) => <button key={m} type="button" className="bpk-link" disabled={busy} onClick={() => { setMode(m); setCode(""); setError(""); }}>
-            {m === "totp" ? "Use authenticator code instead" : "Email me a code instead"}
-          </button>)}
-          <button type="button" className="bpk-link bpk-muted" disabled={busy} onClick={onCancel}>Cancel</button>
-        </div>
-      </>}
-    </div>
+      </div>}
+    </section>
   </div>;
 }
 
@@ -177,7 +218,7 @@ export function StepUpDialog({ client, methods, fallbacks, onConfirmed, onCancel
  * A sign-in option for passkeys, laid out like the portals' other sign-in options (icon, title, hint,
  * chevron); pass the portal's option class. Hidden in browsers without passkeys.
  */
-export function PasskeySignInButton({ client, onSignedIn, onError, className = "bpk-option", disabled = false, chevron = true }: { client: PasskeyClient; onSignedIn: () => void; onError: (message: string) => void; className?: string; disabled?: boolean; chevron?: boolean }) {
+export function PasskeySignInButton({ client, onSignedIn, onError, className = "auth-provider", disabled = false, chevron = true }: { client: PasskeyClient; onSignedIn: () => void; onError: (message: string) => void; className?: string; disabled?: boolean; chevron?: boolean }) {
   const [supported, setSupported] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => setSupported(passkeysSupported()), []);
@@ -188,21 +229,37 @@ export function PasskeySignInButton({ client, onSignedIn, onError, className = "
     try {
       await client.signIn();
       onSignedIn();
-    } catch (error) {
-      if (!(error instanceof PasskeyError && error.cancelled)) onError(error instanceof Error ? error.message : "Passkey sign-in failed. Try again.");
+    } catch (caught) {
+      if (!isCancelled(caught)) onError(messageOf(caught, "Passkey sign-in failed. Try again."));
     } finally {
       setBusy(false);
     }
   }}>
-    {busy ? <SpinnerIcon /> : <PasskeyIcon />}
+    {busy ? <Spinner size={17} /> : <ScanFace size={17} />}
     <span><strong>{busy ? "Waiting for your passkey…" : "Sign in with a passkey"}</strong><small>Face ID, fingerprint or security key</small></span>
-    {chevron ? <ChevronIcon /> : null}
+    {chevron ? <ChevronRight size={15} /> : null}
   </button>;
 }
 
 // ── Security settings ────────────────────────────────────────────────────────────────────────────
 
-export function PasskeyManager({ client, title = "Passkeys", description = "Sign in with Face ID, Touch ID, Windows Hello or a security key instead of codes. Passkeys can't be phished, and only work on this site." }: { client: PasskeyClient; title?: string; description?: string }) {
+// The icon a person recognises their passkey by: the device it lives on, or a security key.
+function deviceIcon(passkey: Passkey): LucideIcon {
+  const name = passkey.name.toLowerCase();
+  if (/iphone|phone|android|pixel|galaxy/.test(name)) return Smartphone;
+  if (/ipad|tablet/.test(name)) return Tablet;
+  if (/mac|windows|pc|chromebook|laptop|linux|computer/.test(name)) return Laptop;
+  const transports = passkey.transports ?? [];
+  if (!passkey.synced && transports.length > 0 && transports.every((t) => t === "usb" || t === "nfc" || t === "ble")) return KeyRound;
+  return ScanFace;
+}
+
+/**
+ * The Security settings list of passkeys. renderHead draws the portal's own panel header around the
+ * "Add a passkey" action, and bodyClassName is the portal's panel body, so the list sits in the page's
+ * existing panel design.
+ */
+export function PasskeyManager({ client, renderHead, bodyClassName = "" }: { client: PasskeyClient; renderHead?: (action: ReactNode) => ReactNode; bodyClassName?: string }) {
   const { confirm } = useStepUp();
   const [passkeys, setPasskeys] = useState<Passkey[] | null>(null);
   const [limit, setLimit] = useState(10);
@@ -219,7 +276,7 @@ export function PasskeyManager({ client, title = "Passkeys", description = "Sign
       setPasskeys(out.passkeys);
       setLimit(out.limit);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Passkeys could not be loaded.");
+      setError(messageOf(caught, "Passkeys could not be loaded."));
       setPasskeys([]);
     }
   }, [client]);
@@ -248,48 +305,54 @@ export function PasskeyManager({ client, title = "Passkeys", description = "Sign
       await load();
       setNotice(success);
     } catch (caught) {
-      if (!(caught instanceof PasskeyError && caught.cancelled)) setError(caught instanceof Error ? caught.message : "That didn't work. Try again.");
+      if (!isCancelled(caught)) setError(messageOf(caught, "That didn't work. Try again."));
     } finally {
       setBusy("");
     }
   }
 
-  const add = () => run("add", async () => { await guarded(() => client.register(suggestedPasskeyName())); }, "Passkey added. You can now sign in with it.");
+  const add = () => run("add", async () => { await guarded(() => client.register(suggestedPasskeyName())); }, "Passkey added. You can sign in with it now.");
   const full = passkeys !== null && passkeys.length >= limit;
 
-  return <section className="bpk-manager" aria-labelledby="bpk-manager-title">
-    <div className="bpk-manager-head">
-      <div>
-        <h2 id="bpk-manager-title">{title}</h2>
-        <p>{description}</p>
-      </div>
-      {supported ? <button type="button" className="bpk-primary bpk-add" disabled={!!busy || full || passkeys === null} onClick={() => void add()}>
-        {busy === "add" ? <SpinnerIcon /> : <PasskeyIcon />}{busy === "add" ? "Follow your device's prompt…" : "Add a passkey"}
-      </button> : null}
+  const action = supported ? <button type="button" className="primary-button bpk-add" disabled={!!busy || full || passkeys === null} onClick={() => void add()}>
+    {busy === "add" ? <Spinner size={14} /> : <ScanFace size={14} />}{busy === "add" ? "Follow your device…" : "Add a passkey"}
+  </button> : null;
+
+  return <>
+    {renderHead ? renderHead(action) : <div className="bpk-head"><div><h2>Passkeys</h2><p>Sign in with Face ID, fingerprint or a security key, and confirm changes with one touch.</p></div>{action}</div>}
+    <div className={`bpk-body ${bodyClassName}`.trim()}>
+      {!supported ? <p className="bpk-note">This browser can&apos;t use passkeys. Open this page in an up-to-date Safari, Chrome, Edge or Firefox to add one.</p> : null}
+      {full ? <p className="bpk-note">You&apos;ve reached the limit of {limit} passkeys. Remove one to add another.</p> : null}
+      {error ? <div className="auth-error bpk-alert" role="alert"><ShieldAlert size={15} /><span>{error}</span></div> : null}
+      {notice ? <p className="bpk-success" role="status"><CircleCheck size={15} />{notice}</p> : null}
+      {passkeys === null ? <div className="bpk-skeleton" aria-hidden="true" />
+        : passkeys.length === 0 ? <div className="bpk-empty"><span className="bpk-row-icon"><ScanFace size={17} /></span><div><strong>No passkeys yet</strong><span>Add one to sign in with a glance or a touch. It can&apos;t be phished and only works on this site.</span></div></div>
+        : <ul className="bpk-list">
+          {passkeys.map((passkey) => {
+            const Icon = deviceIcon(passkey);
+            const editing = renaming?.id === passkey.id;
+            const confirmingRemove = removing === passkey.id;
+            return <li key={passkey.id} className="bpk-row">
+              <span className="bpk-row-icon"><Icon size={17} /></span>
+              {editing ? <form className="bpk-rename" onSubmit={(event) => { event.preventDefault(); const name = renaming.name.trim(); if (!name) return; void run(passkey.id, () => client.rename(passkey.id, name), "Passkey renamed.").then(() => setRenaming(null)); }}>
+                <input className="bpk-input" value={renaming.name} maxLength={40} autoFocus aria-label="Passkey name" onChange={(event) => setRenaming({ id: passkey.id, name: event.target.value })} onKeyDown={(event) => { if (event.key === "Escape") setRenaming(null); }} />
+                <button type="button" className="ghost-button" onClick={() => setRenaming(null)}>Cancel</button>
+                <button type="submit" className="primary-button" disabled={busy === passkey.id || !renaming.name.trim()}>{busy === passkey.id ? <Spinner size={14} /> : null}Save</button>
+              </form> : <div className="bpk-row-copy">
+                <strong>{passkey.name}{passkey.synced ? <span className="bpk-tag">Synced</span> : null}</strong>
+                <span>{[passkey.synced ? "Available on your signed-in devices" : "On this device only", `added ${relative(passkey.createdAt)}`, passkey.lastUsedAt ? `last used ${relative(passkey.lastUsedAt)}` : "not used yet"].join(" · ")}</span>
+              </div>}
+              {editing ? null : confirmingRemove ? <div className="bpk-row-actions">
+                <span className="bpk-ask">Remove this passkey?</span>
+                <button type="button" className="ghost-button" disabled={busy === passkey.id} onClick={() => setRemoving("")}>Keep</button>
+                <button type="button" className="danger-button" disabled={busy === passkey.id} onClick={() => void run(passkey.id, () => guarded(() => client.remove(passkey.id)), "Passkey removed.").then(() => setRemoving(""))}>{busy === passkey.id ? <Spinner size={14} /> : <Trash2 size={14} />}Remove</button>
+              </div> : <div className="bpk-row-actions">
+                <button type="button" className="ghost-button" disabled={!!busy} onClick={() => { setRenaming({ id: passkey.id, name: passkey.name }); setRemoving(""); }}><Pencil size={13} />Rename</button>
+                <button type="button" className="ghost-button" disabled={!!busy} onClick={() => { setRemoving(passkey.id); setRenaming(null); }}><Trash2 size={13} />Remove</button>
+              </div>}
+            </li>;
+          })}
+        </ul>}
     </div>
-    {!supported ? <p className="bpk-note">This browser doesn't support passkeys. Open this page in an up-to-date Safari, Chrome, Edge or Firefox to add one.</p> : null}
-    {full ? <p className="bpk-note">You've reached the limit of {limit} passkeys. Remove one to add another.</p> : null}
-    {error ? <p className="bpk-error" role="alert">{error}</p> : null}
-    {notice ? <p className="bpk-success" role="status"><CheckIcon />{notice}</p> : null}
-    {passkeys === null ? <div className="bpk-skeleton" aria-hidden="true" /> : passkeys.length === 0 ? <p className="bpk-empty">No passkeys yet. Add one to sign in with a glance or a touch.</p> : <ul className="bpk-list">
-      {passkeys.map((passkey) => <li key={passkey.id} className="bpk-row">
-        <span className="bpk-row-icon"><PasskeyIcon /></span>
-        {renaming?.id === passkey.id ? <form className="bpk-rename" onSubmit={(event) => { event.preventDefault(); const name = renaming.name.trim(); if (!name) return; void run(passkey.id, () => client.rename(passkey.id, name), "Passkey renamed.").then(() => setRenaming(null)); }}>
-          <input value={renaming.name} maxLength={40} autoFocus aria-label="Passkey name" onChange={(event) => setRenaming({ id: passkey.id, name: event.target.value })} onKeyDown={(event) => { if (event.key === "Escape") setRenaming(null); }} />
-          <button type="submit" className="bpk-secondary" disabled={busy === passkey.id || !renaming.name.trim()}>Save</button>
-          <button type="button" className="bpk-link bpk-muted" onClick={() => setRenaming(null)}>Cancel</button>
-        </form> : <div className="bpk-row-copy">
-          <strong>{passkey.name}</strong>
-          <span>{[passkey.synced ? "Synced across your devices" : "On this device only", `Added ${relative(passkey.createdAt)}`, passkey.lastUsedAt ? `Last used ${relative(passkey.lastUsedAt)}` : "Not used yet"].join(" · ")}</span>
-        </div>}
-        {renaming?.id === passkey.id ? null : removing === passkey.id ? <span className="bpk-row-actions">
-          <button type="button" className="bpk-danger" disabled={busy === passkey.id} onClick={() => void run(passkey.id, () => guarded(() => client.remove(passkey.id)), "Passkey removed.").then(() => setRemoving(""))}>{busy === passkey.id ? <SpinnerIcon /> : null}Remove</button>
-          <button type="button" className="bpk-link bpk-muted" disabled={busy === passkey.id} onClick={() => setRemoving("")}>Keep</button>
-        </span> : <span className="bpk-row-actions">
-          <button type="button" className="bpk-secondary" disabled={!!busy} onClick={() => { setRenaming({ id: passkey.id, name: passkey.name }); setRemoving(""); }}>Rename</button>
-          <button type="button" className="bpk-secondary" disabled={!!busy} onClick={() => { setRemoving(passkey.id); setRenaming(null); }}>Remove</button>
-        </span>}
-      </li>)}
-    </ul>}
-  </section>;
+  </>;
 }

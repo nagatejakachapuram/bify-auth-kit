@@ -7,16 +7,35 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
     "./styles.css": "./dist/styles.css"
   },
-  "files": ["dist"],
-  "sideEffects": ["*.css"],
+  "files": [
+    "dist"
+  ],
+  "sideEffects": [
+    "*.css"
+  ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json && cp src/styles.css dist/styles.css",
     "test": "npm run build && node --test test/*.test.mjs",
     "prepare": "npm run build"
   },
-  "peerDependencies": { "react": ">=18" },
-  "devDependencies": { "@types/react": "^18.3.24", "react": "^18.3.1", "react-dom": "^18.3.1", "typescript": "^5.9.3" }
+  "peerDependencies": {
+    "react": ">=18",
+    "lucide-react": ">=0.400.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.24",
+    "lucide-react": "0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@simplewebauthn/browser": "14.0.0"
+  }
 }
