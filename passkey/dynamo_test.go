@@ -29,6 +29,17 @@ func newFakeDynamo(t *testing.T) *fakeDynamo {
 	return &fakeDynamo{t: t, items: map[string]map[string]types.AttributeValue{}}
 }
 
+func TestUnreadablePasskeyDoesNotDisableConfirmation(t *testing.T) {
+	db := newFakeDynamo(t)
+	key := passkeyKey("user-a", []byte("credential"))
+	key["credential"] = s("invalid-json")
+	db.items[itemKey(key)] = key
+	store := DynamoStore{DB: db, Table: "test"}
+	if _, err := store.ListPasskeys(t.Context(), "user-a"); err == nil {
+		t.Fatal("unreadable passkey was treated as an account with no passkeys")
+	}
+}
+
 func itemKey(key map[string]types.AttributeValue) string {
 	return str(key, "PK") + "|" + str(key, "SK")
 }

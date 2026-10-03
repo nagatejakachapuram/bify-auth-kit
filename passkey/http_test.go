@@ -2,6 +2,7 @@ package passkey
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,6 +14,60 @@ import (
 
 	"github.com/nagatejakachapuram/bify-auth-kit/passkeytest"
 )
+
+type unavailablePasskeyStore struct{ Store }
+
+func (unavailablePasskeyStore) ListPasskeys(context.Context, string) ([]StoredPasskey, error) {
+	return nil, errors.New("passkey lookup unavailable")
+}
+
+func TestFallbackLookupFailureCannotBypassConfirmation(t *testing.T) {
+	f := newFixture(t)
+	hooks := Hooks{
+		Current:   func(*http.Request) (User, string, error) { return f.user, "session-a", nil },
+		Fallbacks: func(*http.Request, User) ([]string, error) { return nil, errors.New("profile unavailable") },
+	}
+	called := false
+	guarded := f.svc.RequireRecentAuth(hooks)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
+	rec := httptest.NewRecorder()
+	guarded.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/sensitive", nil))
+	if rec.Code != http.StatusServiceUnavailable || called {
+		t.Fatalf("fallback failure = %d, sensitive action executed = %v", rec.Code, called)
+	}
+}
+
+func TestPasskeyLookupFailureCannotBypassConfirmation(t *testing.T) {
+	f := newFixture(t)
+	saved := f.registerPasskey(t, passkeytest.NewAuthenticator(t, testRP, testOrigin))
+	f.svc.store = unavailablePasskeyStore{f.store}
+	hooks := Hooks{Current: func(*http.Request) (User, string, error) { return f.user, "session-a", nil }}
+	mux := http.NewServeMux()
+	f.svc.Mount(hooks, func(method, path string, h http.HandlerFunc) { mux.HandleFunc(method+" "+path, h) })
+	called := false
+	mux.Handle("POST /sensitive", f.svc.RequireRecentAuth(hooks)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	for _, path := range []string{"/sensitive", PathDelete, PathRegisterOptions, PathStepUpStatus} {
+		method := http.MethodPost
+		if path == PathStepUpStatus {
+			method = http.MethodGet
+		}
+		rec := httptest.NewRecorder()
+		body, _ := json.Marshal(map[string]string{"id": saved.ID})
+		mux.ServeHTTP(rec, httptest.NewRequest(method, path, bytes.NewReader(body)))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s = %d, want 503", path, rec.Code)
+		}
+	}
+	if called {
+		t.Error("sensitive action executed during lookup failure")
+	}
+	keys, _ := f.store.ListPasskeys(t.Context(), f.user.ID)
+	if len(keys) != 1 {
+		t.Error("passkey removed without confirmation")
+	}
+}
 
 type httpFixture struct {
 	*fixture
@@ -42,7 +97,7 @@ func newHTTPFixture(t *testing.T) *httpFixture {
 			}
 			return nil
 		},
-		Fallbacks: func(*http.Request, User) []string { return []string{"totp"} },
+		Fallbacks: func(*http.Request, User) ([]string, error) { return []string{"totp"}, nil },
 		Event:     func(_ *http.Request, name string) { f.events = append(f.events, name) },
 	}
 	f.svc.Mount(hooks, func(method, path string, h http.HandlerFunc) { f.mux.HandleFunc(method+" "+path, h) })
@@ -196,7 +251,7 @@ func TestAnAccountWithNoWayToConfirmIsNotLockedOut(t *testing.T) {
 	f.svc.cfg.MaxPerUser = 10
 	hooks := Hooks{
 		Current:   func(*http.Request) (User, string, error) { return f.user, f.session, nil },
-		Fallbacks: func(*http.Request, User) []string { return nil }, // wallet-only: no email, no authenticator app
+		Fallbacks: func(*http.Request, User) ([]string, error) { return nil, nil }, // wallet-only: no email, no authenticator app
 	}
 	guarded := f.svc.RequireRecentAuth(hooks)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	rec := httptest.NewRecorder()
@@ -219,7 +274,7 @@ func TestAnAccountWithNoWayToConfirmAddsAPasskeyOnlyRightAfterSigningIn(t *testi
 	session := "session-a" // signed in an hour ago
 	hooks := Hooks{
 		Current:   func(*http.Request) (User, string, error) { return f.user, session, nil },
-		Fallbacks: func(*http.Request, User) []string { return nil }, // wallet-only
+		Fallbacks: func(*http.Request, User) ([]string, error) { return nil, nil }, // wallet-only
 	}
 	f.svc.Mount(hooks, func(method, path string, h http.HandlerFunc) { mux.HandleFunc(method+" "+path, h) })
 	call := func() *httptest.ResponseRecorder {

@@ -19,7 +19,8 @@ type Hooks struct {
 	CheckOrigin func(r *http.Request) error
 	// Fallbacks lists how a user confirms a sensitive action without a passkey, for example "totp" or
 	// "email". The portal serves those confirmations and calls Service.MarkStepUp when one succeeds.
-	Fallbacks func(r *http.Request, user User) []string
+	// Return an error if the methods cannot be determined; an empty list means none are configured.
+	Fallbacks func(r *http.Request, user User) ([]string, error)
 	// Event, when set, records security events: passkey_added, passkey_removed, passkey_renamed,
 	// passkey_sign_in and step_up_passkey.
 	Event func(r *http.Request, name string)
@@ -90,7 +91,11 @@ func (s *Service) recentOrRefuse(w http.ResponseWriter, r *http.Request, hooks H
 	if recent {
 		return true
 	}
-	methods := s.methods(r, hooks, user)
+	methods, err := s.methods(r, hooks, user)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "Confirmation is temporarily unavailable. Try again.", "")
+		return false
+	}
 	if len(methods) == 0 {
 		if !allowWithoutMethods {
 			writeError(w, http.StatusForbidden, "For your security, sign out and sign in again, then add your passkey.", ReauthRequiredCode)
@@ -110,15 +115,23 @@ func (s *Service) recentOrRefuse(w http.ResponseWriter, r *http.Request, hooks H
 }
 
 // methods lists how this user can confirm: their passkeys first, then the portal's fallbacks.
-func (s *Service) methods(r *http.Request, hooks Hooks, user User) []string {
+func (s *Service) methods(r *http.Request, hooks Hooks, user User) ([]string, error) {
 	methods := []string{}
-	if has, err := s.HasPasskeys(r.Context(), user.ID); err == nil && has {
+	has, err := s.HasPasskeys(r.Context(), user.ID)
+	if err != nil {
+		return nil, err
+	}
+	if has {
 		methods = append(methods, "passkey")
 	}
 	if hooks.Fallbacks != nil {
-		methods = append(methods, hooks.Fallbacks(r, user)...)
+		fallbacks, err := hooks.Fallbacks(r, user)
+		if err != nil {
+			return nil, err
+		}
+		methods = append(methods, fallbacks...)
 	}
-	return methods
+	return methods, nil
 }
 
 func (s *Service) post(hooks Hooks, next http.HandlerFunc) http.HandlerFunc {
@@ -386,8 +399,13 @@ func (s *Service) handleStepUpStatus(hooks Hooks) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "Confirmation is temporarily unavailable. Try again.", "")
 			return
 		}
+		methods, err := s.methods(r, hooks, user)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "Confirmation is temporarily unavailable. Try again.", "")
+			return
+		}
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, http.StatusOK, map[string]any{"recent": recent, "methods": s.methods(r, hooks, user)})
+		writeJSON(w, http.StatusOK, map[string]any{"recent": recent, "methods": methods})
 	}
 }
 

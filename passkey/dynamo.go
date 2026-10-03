@@ -93,7 +93,7 @@ func (d DynamoStore) ListPasskeys(ctx context.Context, userID string) ([]StoredP
 		for _, item := range page.Items {
 			credential, err := unmarshalCredential(str(item, "credential"))
 			if err != nil {
-				continue // an unreadable record cannot sign in; it is skipped rather than failing the list
+				return nil, err // unknown credential state must never disable confirmation
 			}
 			out = append(out, StoredPasskey{Credential: credential, Name: str(item, "name"), CreatedAt: unix(item, "createdAt"), LastUsedAt: unix(item, "lastUsedAt")})
 		}
