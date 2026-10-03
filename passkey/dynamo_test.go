@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -147,20 +148,28 @@ func (f *fakeDynamo) DeleteItem(_ context.Context, in *dynamodb.DeleteItemInput,
 func (f *fakeDynamo) TransactWriteItems(_ context.Context, in *dynamodb.TransactWriteItemsInput, _ ...func(*dynamodb.Options)) (*dynamodb.TransactWriteItemsOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, item := range in.TransactItems {
+	reasons := make([]types.CancellationReason, len(in.TransactItems))
+	failed := false
+	for i, item := range in.TransactItems {
+		valid := false
 		switch {
 		case item.Put != nil:
-			if !f.check(item.Put.ConditionExpression, f.items[itemKey(item.Put.Item)], item.Put.ExpressionAttributeValues) {
-				return nil, &types.TransactionCanceledException{}
-			}
+			valid = f.check(item.Put.ConditionExpression, f.items[itemKey(item.Put.Item)], item.Put.ExpressionAttributeValues)
 		case item.Delete != nil:
-			if !f.check(item.Delete.ConditionExpression, f.items[itemKey(item.Delete.Key)], item.Delete.ExpressionAttributeValues) {
-				return nil, &types.TransactionCanceledException{}
-			}
+			valid = f.check(item.Delete.ConditionExpression, f.items[itemKey(item.Delete.Key)], item.Delete.ExpressionAttributeValues)
 		default:
 			f.t.Fatal("fakeDynamo: unsupported transaction item")
 		}
+		reasons[i].Code = aws.String("None")
+		if !valid {
+			failed = true
+			reasons[i].Code = aws.String("ConditionalCheckFailed")
+		}
 	}
+	if failed {
+		return nil, &types.TransactionCanceledException{CancellationReasons: reasons}
+	}
+
 	for _, item := range in.TransactItems {
 		if item.Put != nil {
 			f.items[itemKey(item.Put.Item)] = clone(item.Put.Item)

@@ -117,56 +117,50 @@ func (d DynamoStore) PasskeyOwner(ctx context.Context, credentialID []byte) (str
 	return owner, nil
 }
 
-// AddPasskey stores a passkey and its owner index together. A credential id can belong to one account
-// only, and an account holds at most max passkeys.
-func (d DynamoStore) AddPasskey(ctx context.Context, userID string, passkey StoredPasskey, max int) error {
-	existing, err := d.ListPasskeys(ctx, userID)
-	if err != nil {
-		return err
-	}
-	if len(existing) >= max {
-		return ErrLimit
-	}
-	credential, err := marshalCredential(passkey.Credential)
-	if err != nil {
-		return err
-	}
-	record := passkeyKey(userID, passkey.Credential.ID)
-	record["kind"] = s("passkey")
-	record["userID"] = s(userID)
-	record["credential"] = s(credential)
-	record["name"] = s(passkey.Name)
-	record["createdAt"] = n(passkey.CreatedAt.Unix())
-	index := ownerKey(passkey.Credential.ID)
-	index["kind"] = s("identity-index")
-	index["userID"] = s(userID)
-	_, err = d.DB.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
-		{Put: &types.Put{TableName: aws.String(d.Table), Item: record, ConditionExpression: aws.String("attribute_not_exists(PK)")}},
-		{Put: &types.Put{TableName: aws.String(d.Table), Item: index, ConditionExpression: aws.String("attribute_not_exists(PK)")}},
-	}})
-	if conditionFailed(err) {
-		return ErrExists
-	}
-	return err
-}
-
-// UpdatePasskeyUse stores the credential's new counter and flags after a sign-in or confirmation.
+// UpdatePasskeyUse commits a verified assertion only if its counter still advances the latest
+// stored counter. Comparing the exact persisted JSON also works for existing records without a
+// version attribute. A lost race is rechecked, never allowed to overwrite a newer counter.
 func (d DynamoStore) UpdatePasskeyUse(ctx context.Context, userID string, credential webauthn.Credential, at time.Time) error {
 	raw, err := marshalCredential(credential)
 	if err != nil {
 		return err
 	}
-	_, err = d.DB.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:                 aws.String(d.Table),
-		Key:                       passkeyKey(userID, credential.ID),
-		UpdateExpression:          aws.String("SET credential = :credential, lastUsedAt = :at"),
-		ConditionExpression:       aws.String("attribute_exists(PK)"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{":credential": s(raw), ":at": n(at.Unix())},
-	})
-	if conditionFailed(err) {
-		return ErrNotFound // removed while in use: the sign-in is refused
+	for attempt := 0; attempt < 8; attempt++ {
+		out, err := d.DB.GetItem(ctx, &dynamodb.GetItemInput{
+			TableName: aws.String(d.Table), Key: passkeyKey(userID, credential.ID), ConsistentRead: aws.Bool(true),
+		})
+		if err != nil {
+			return err
+		}
+		if len(out.Item) == 0 {
+			return ErrNotFound
+		}
+		previous := str(out.Item, "credential")
+		stored, err := unmarshalCredential(previous)
+		if err != nil {
+			return err
+		}
+		if !counterAdvances(stored, credential) {
+			return ErrVerification
+		}
+		usedAt := at
+		if latest := unix(out.Item, "lastUsedAt"); latest.After(usedAt) {
+			usedAt = latest
+		}
+		_, err = d.DB.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName:                 aws.String(d.Table),
+			Key:                       passkeyKey(userID, credential.ID),
+			UpdateExpression:          aws.String("SET credential = :credential, lastUsedAt = :at"),
+			ConditionExpression:       aws.String("attribute_exists(PK) AND credential = :previous"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{":credential": s(raw), ":previous": s(previous), ":at": n(usedAt.Unix())},
+		})
+		var conflict *types.ConditionalCheckFailedException
+		if !errors.As(err, &conflict) {
+			return err
+		}
 	}
-	return err
+	// Bounded contention fails closed: no session/step-up is issued without a committed update.
+	return errors.New("passkey: concurrent credential update; retry authentication")
 }
 
 // RenamePasskey relabels a passkey on the account.
@@ -179,18 +173,6 @@ func (d DynamoStore) RenamePasskey(ctx context.Context, userID string, credentia
 		ExpressionAttributeNames:  map[string]string{"#name": "name"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{":name": s(name)},
 	})
-	if conditionFailed(err) {
-		return ErrNotFound
-	}
-	return err
-}
-
-// DeletePasskey removes a passkey from the account and its owner index together.
-func (d DynamoStore) DeletePasskey(ctx context.Context, userID string, credentialID []byte) error {
-	_, err := d.DB.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
-		{Delete: &types.Delete{TableName: aws.String(d.Table), Key: passkeyKey(userID, credentialID), ConditionExpression: aws.String("attribute_exists(PK)")}},
-		{Delete: &types.Delete{TableName: aws.String(d.Table), Key: ownerKey(credentialID), ConditionExpression: aws.String("userID = :user"), ExpressionAttributeValues: map[string]types.AttributeValue{":user": s(userID)}}},
-	}})
 	if conditionFailed(err) {
 		return ErrNotFound
 	}

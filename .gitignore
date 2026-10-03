@@ -1,5 +1,28 @@
+# Dependencies and build output
 node_modules/
 js/dist/
-.DS_Store
 js/*.tgz
+coverage/
+*.test
+*.out
+
+# Secrets and local configuration: never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.npmrc
+samconfig.toml
+
+# Internal review notes (list remaining weaknesses; kept private)
 SECURITY_REVIEW.md
+
+# Editors, OS and logs
+.DS_Store
+.idea/
+.vscode/
+*.log
+npm-debug.log*

@@ -76,6 +76,12 @@ func (m *MemoryStore) UpdatePasskeyUse(_ context.Context, userID string, credent
 	if !ok {
 		return ErrNotFound
 	}
+	if !counterAdvances(passkey.Credential, credential) {
+		return ErrVerification
+	}
+	if passkey.LastUsedAt.After(at) {
+		at = passkey.LastUsedAt
+	}
 	passkey.Credential, passkey.LastUsedAt = credential, at
 	m.passkeys[userID][key] = passkey
 	return nil
