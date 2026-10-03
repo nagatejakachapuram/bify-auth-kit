@@ -190,3 +190,25 @@ func TestEndpointsRefuseCrossSiteAndSignedOutRequests(t *testing.T) {
 		t.Fatalf("signed-out list = %d", rec.Code)
 	}
 }
+
+func TestAnAccountWithNoWayToConfirmIsNotLockedOut(t *testing.T) {
+	f := newHTTPFixture(t)
+	f.svc.cfg.MaxPerUser = 10
+	hooks := Hooks{
+		Current:   func(*http.Request) (User, string, error) { return f.user, f.session, nil },
+		Fallbacks: func(*http.Request, User) []string { return nil }, // wallet-only: no email, no authenticator app
+	}
+	guarded := f.svc.RequireRecentAuth(hooks)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	rec := httptest.NewRecorder()
+	guarded.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/account/wallets/unlink", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("no way to confirm = %d %s", rec.Code, rec.Body.String())
+	}
+	// Once the account has a passkey, the same action asks for it.
+	f.registerPasskey(t, passkeytest.NewAuthenticator(t, testRP, testOrigin))
+	rec = httptest.NewRecorder()
+	guarded.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/account/wallets/unlink", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("with a passkey = %d", rec.Code)
+	}
+}

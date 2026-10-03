@@ -85,10 +85,17 @@ func (s *Service) recentOrRefuse(w http.ResponseWriter, r *http.Request, hooks H
 	if recent {
 		return true
 	}
+	methods := s.methods(r, hooks, user)
+	if len(methods) == 0 {
+		// The account has no way to confirm (for example a wallet-only account without a passkey,
+		// email or authenticator app): asking would lock its owner out, so the action proceeds as it
+		// did before passkeys. Adding any of them turns confirmation on.
+		return true
+	}
 	writeJSON(w, http.StatusForbidden, map[string]any{
 		"error":   "Confirm it's you to continue.",
 		"code":    StepUpRequiredCode,
-		"methods": s.methods(r, hooks, user),
+		"methods": methods,
 	})
 	return false
 }
