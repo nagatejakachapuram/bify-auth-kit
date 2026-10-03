@@ -1,0 +1,72 @@
+/* @bify/passkeys: styled with the design tokens both BIFY portals define, so the components look native in
+   each and follow its light and dark themes. Fallbacks keep them readable anywhere else. */
+
+.bpk-spinner { width: 15px; height: 15px; flex: 0 0 auto; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: bpk-spin .7s linear infinite; }
+@keyframes bpk-spin { to { transform: rotate(360deg); } }
+
+.bpk-primary, .bpk-secondary, .bpk-danger { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 0 16px; border-radius: 11px; font: inherit; font-size: 13px; font-weight: 620; cursor: pointer; transition: background .15s, border-color .15s, opacity .15s, transform .2s cubic-bezier(.3, 1.4, .5, 1); }
+.bpk-primary { border: 0; background: var(--primary, #17191c); color: var(--primary-text, #fff); }
+.bpk-secondary { border: 1px solid var(--border, #0000001a); background: var(--surface, #fff); color: var(--text, #17191c); min-height: 34px; padding: 0 12px; font-size: 12.5px; }
+.bpk-secondary:hover { background: var(--surface-2, #f5f4ef); }
+.bpk-danger { border: 0; background: var(--red, #bd3948); color: #fff; min-height: 34px; padding: 0 12px; font-size: 12.5px; }
+.bpk-primary:active, .bpk-secondary:active, .bpk-danger:active { transform: scale(.98); }
+.bpk-primary:disabled, .bpk-secondary:disabled, .bpk-danger:disabled { cursor: default; opacity: .55; }
+.bpk-link { border: 0; padding: 4px 2px; background: none; color: var(--text, #17191c); font: inherit; font-size: 12.5px; font-weight: 560; cursor: pointer; }
+.bpk-link:hover { text-decoration: underline; }
+.bpk-muted { color: var(--muted, #6b7380); font-weight: 500; }
+.bpk-link:disabled { cursor: default; opacity: .5; }
+
+.bpk-error { margin: 10px 0 0; color: var(--red, #bd3948); font-size: 12.5px; line-height: 1.45; }
+.bpk-success { display: flex; align-items: center; gap: 7px; margin: 10px 0 0; color: var(--green, #16805d); font-size: 12.5px; }
+.bpk-note, .bpk-empty { margin: 10px 0 0; color: var(--muted, #6b7380); font-size: 12.5px; line-height: 1.5; }
+
+/* Sign-in option (when no portal class is passed) */
+.bpk-option { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 58px; padding: 11px 13px; border: 1px solid var(--border, #0000001a); border-radius: 11px; background: var(--surface, #fff); color: var(--text, #17191c); font: inherit; text-align: left; cursor: pointer; }
+.bpk-option > span { display: grid; flex: 1; gap: 3px; }
+.bpk-option strong { font-size: 13px; }
+.bpk-option small { color: var(--muted, #6b7380); font-size: 11px; }
+
+/* Security settings */
+.bpk-manager { display: grid; gap: 4px; }
+.bpk-manager-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.bpk-manager-head h2 { margin: 0 0 5px; color: var(--text, #17191c); font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
+.bpk-manager-head p { max-width: 520px; margin: 0; color: var(--muted, #6b7380); font-size: 12.5px; line-height: 1.55; }
+.bpk-add { flex: 0 0 auto; }
+.bpk-list { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
+.bpk-row { display: flex; align-items: center; gap: 12px; min-height: 62px; padding: 11px 13px; border: 1px solid var(--border, #0000001a); border-radius: 13px; background: var(--surface, #fff); }
+.bpk-row-icon { display: grid; place-items: center; flex: 0 0 auto; width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2, #f5f4ef); color: var(--text, #17191c); }
+.bpk-row-copy { display: grid; flex: 1; gap: 3px; min-width: 0; }
+.bpk-row-copy strong { overflow: hidden; color: var(--text, #17191c); font-size: 13.5px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+.bpk-row-copy span { color: var(--muted, #6b7380); font-size: 11.5px; line-height: 1.4; }
+.bpk-row-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.bpk-rename { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.bpk-rename input { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border-strong, #0000003a); border-radius: 9px; background: var(--surface, #fff); color: var(--text, #17191c); font: inherit; font-size: 13px; outline: none; }
+.bpk-skeleton { height: 62px; margin-top: 14px; border-radius: 13px; background: linear-gradient(90deg, var(--surface-2, #f5f4ef), var(--surface-3, #eeede7), var(--surface-2, #f5f4ef)); background-size: 200% 100%; animation: bpk-shimmer 1.3s ease-in-out infinite; }
+@keyframes bpk-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* Confirm it's you */
+.bpk-overlay { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; background: #0b0d1299; backdrop-filter: blur(6px); animation: bpk-fade .18s ease-out; }
+.bpk-dialog { width: min(400px, 100%); padding: 26px 24px 18px; border: 1px solid var(--border, #0000001a); border-radius: 20px; background: var(--surface, #fff); color: var(--text, #17191c); box-shadow: 0 24px 80px #00000038; text-align: center; animation: bpk-rise .32s cubic-bezier(.2, 1.2, .4, 1); }
+.bpk-dialog-icon { display: inline-grid; place-items: center; width: 52px; height: 52px; margin-bottom: 12px; border-radius: 16px; background: var(--surface-2, #f5f4ef); color: var(--text, #17191c); transition: background .2s, color .2s; }
+.bpk-dialog-icon.bpk-done { border-radius: 50%; background: var(--green, #16805d); color: #fff; animation: bpk-pop .4s cubic-bezier(.3, 1.6, .5, 1); }
+.bpk-dialog h2 { margin: 0 0 7px; font-size: 19px; font-weight: 680; letter-spacing: -.02em; }
+.bpk-dialog-copy { margin: 0 0 16px; color: var(--muted, #6b7380); font-size: 13px; line-height: 1.55; }
+.bpk-dialog > .bpk-primary { width: 100%; min-height: 46px; font-size: 14px; }
+.bpk-code { display: grid; gap: 10px; }
+.bpk-code input { height: 48px; border: 1px solid var(--border-strong, #0000003a); border-radius: 12px; background: var(--surface-2, #f5f4ef); color: var(--text, #17191c); font: inherit; font-size: 22px; font-weight: 600; letter-spacing: .35em; text-align: center; outline: none; }
+.bpk-code .bpk-primary { min-height: 46px; }
+.bpk-dialog-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; margin-top: 14px; }
+@keyframes bpk-fade { from { opacity: 0; } }
+@keyframes bpk-rise { from { opacity: 0; transform: translateY(12px) scale(.98); } }
+@keyframes bpk-pop { from { transform: scale(.6); } }
+
+@media (max-width: 560px) {
+  .bpk-row { flex-wrap: wrap; }
+  .bpk-row-actions { width: 100%; justify-content: flex-end; }
+  .bpk-overlay { align-items: end; padding: 0; }
+  .bpk-dialog { width: 100%; padding-bottom: max(18px, env(safe-area-inset-bottom)); border-radius: 20px 20px 0 0; animation-name: bpk-sheet; }
+  @keyframes bpk-sheet { from { transform: translateY(100%); } }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bpk-spinner, .bpk-skeleton, .bpk-overlay, .bpk-dialog, .bpk-dialog-icon.bpk-done { animation: none; }
+}
