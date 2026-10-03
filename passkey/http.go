@@ -42,6 +42,10 @@ const (
 // StepUpRequiredCode is the "code" of the 403 answered when an action needs a recent confirmation.
 const StepUpRequiredCode = "step_up_required"
 
+// ReauthRequiredCode is the "code" answered when adding a passkey needs a fresh sign-in, because the
+// account has no other way to confirm it's the owner.
+const ReauthRequiredCode = "reauth_required"
+
 // Mount registers the passkey endpoints with the portal's router through handle (for chi:
 // func(method, path string, h http.HandlerFunc) { r.Method(method, path, h) }).
 func (s *Service) Mount(hooks Hooks, handle func(method, path string, handler http.HandlerFunc)) {
@@ -67,7 +71,7 @@ func (s *Service) RequireRecentAuth(hooks Hooks) func(http.Handler) http.Handler
 				writeError(w, http.StatusUnauthorized, "authentication required", "")
 				return
 			}
-			if !s.recentOrRefuse(w, r, hooks, user, sessionKey) {
+			if !s.recentOrRefuse(w, r, hooks, user, sessionKey, true) {
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -75,8 +79,9 @@ func (s *Service) RequireRecentAuth(hooks Hooks) func(http.Handler) http.Handler
 	}
 }
 
-// recentOrRefuse answers 403 step_up_required (and returns false) unless the session is recent.
-func (s *Service) recentOrRefuse(w http.ResponseWriter, r *http.Request, hooks Hooks, user User, sessionKey string) bool {
+// recentOrRefuse answers 403 step_up_required (and returns false) unless the session is recent. An account
+// with no way to confirm is let through when allowWithoutMethods, and otherwise asked to sign in again.
+func (s *Service) recentOrRefuse(w http.ResponseWriter, r *http.Request, hooks Hooks, user User, sessionKey string, allowWithoutMethods bool) bool {
 	recent, err := s.RecentlyAuthenticated(r.Context(), sessionKey)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "Confirmation is temporarily unavailable. Try again.", "")
@@ -87,6 +92,10 @@ func (s *Service) recentOrRefuse(w http.ResponseWriter, r *http.Request, hooks H
 	}
 	methods := s.methods(r, hooks, user)
 	if len(methods) == 0 {
+		if !allowWithoutMethods {
+			writeError(w, http.StatusForbidden, "For your security, sign out and sign in again, then add your passkey.", ReauthRequiredCode)
+			return false
+		}
 		// The account has no way to confirm (for example a wallet-only account without a passkey,
 		// email or authenticator app): asking would lock its owner out, so the action proceeds as it
 		// did before passkeys. Adding any of them turns confirmation on.
@@ -175,8 +184,10 @@ func (s *Service) handleRegisterOptions(hooks Hooks) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "authentication required", "")
 			return
 		}
-		// Adding a passkey grants lasting access to the account, so it is a sensitive action itself.
-		if !s.recentOrRefuse(w, r, hooks, user, sessionKey) {
+		// Adding a passkey grants lasting access to the account, so it is a sensitive action itself. An
+		// account with no way to confirm must have signed in just now: otherwise an old, stolen session
+		// could add a passkey of its own and keep the account after the session ends.
+		if !s.recentOrRefuse(w, r, hooks, user, sessionKey, false) {
 			return
 		}
 		id, creation, err := s.BeginRegistration(r.Context(), user, sessionKey)
@@ -252,7 +263,7 @@ func (s *Service) handleDelete(hooks Hooks) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "authentication required", "")
 			return
 		}
-		if !s.recentOrRefuse(w, r, hooks, user, sessionKey) {
+		if !s.recentOrRefuse(w, r, hooks, user, sessionKey, true) {
 			return
 		}
 		body, err := readBody(r)

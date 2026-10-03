@@ -212,3 +212,28 @@ func TestAnAccountWithNoWayToConfirmIsNotLockedOut(t *testing.T) {
 		t.Fatalf("with a passkey = %d", rec.Code)
 	}
 }
+
+func TestAnAccountWithNoWayToConfirmAddsAPasskeyOnlyRightAfterSigningIn(t *testing.T) {
+	f := newFixture(t)
+	mux := http.NewServeMux()
+	session := "session-a" // signed in an hour ago
+	hooks := Hooks{
+		Current:   func(*http.Request) (User, string, error) { return f.user, session, nil },
+		Fallbacks: func(*http.Request, User) []string { return nil }, // wallet-only
+	}
+	f.svc.Mount(hooks, func(method, path string, h http.HandlerFunc) { mux.HandleFunc(method+" "+path, h) })
+	call := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("POST", PathRegisterOptions, nil))
+		return rec
+	}
+	rec := call()
+	if rec.Code != http.StatusForbidden || decode[map[string]string](t, rec)["code"] != ReauthRequiredCode {
+		t.Fatalf("old wallet-only session adding a passkey = %d %s", rec.Code, rec.Body.String())
+	}
+	f.store.AddSession("session-fresh", f.now.Add(-time.Minute))
+	session = "session-fresh"
+	if rec := call(); rec.Code != http.StatusOK {
+		t.Fatalf("fresh wallet-only session adding a passkey = %d %s", rec.Code, rec.Body.String())
+	}
+}

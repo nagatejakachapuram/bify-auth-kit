@@ -59,10 +59,14 @@ export function StepUpProvider({ client, fallbacks = {}, children }: { client: P
     const run = (async () => {
       let available = methods;
       if (!available) {
-        const status = await client.stepUpStatus();
-        if (status.recent) return;
+        // If the status can't be read, carry on: the server still asks when it must, and the request
+        // retries through withStepUp.
+        const status = await client.stepUpStatus().catch(() => null);
+        if (!status || status.recent) return;
         available = status.methods;
       }
+      // No way to confirm (a wallet-only account): the server lets the action through, so there is nothing to ask.
+      if (available.length === 0) return;
       await new Promise<void>((resolve, reject) => setPending({ methods: available!, resolve, reject }));
     })().finally(() => { queue.current = null; });
     queue.current = run;
@@ -138,7 +142,7 @@ export function StepUpDialog({ client, methods, fallbacks, onConfirmed, onCancel
       <h2 id="bpk-step-up-title">{done ? "Confirmed" : "Confirm it's you"}</h2>
       {done ? <p className="bpk-dialog-copy">You won't be asked again for a few minutes.</p> : <>
         <p className="bpk-dialog-copy">
-          {mode === "passkey" ? "This action is protected. Use your passkey, Face ID, Touch ID or your device PIN, to continue."
+          {mode === "passkey" ? "This action is protected. Use your passkey to continue: Face ID, a fingerprint or your device PIN."
             : mode === "totp" ? "This action is protected. Enter the 6-digit code from your authenticator app."
             : emailSent ? "We emailed you a 6-digit code. Enter it to continue." : "This action is protected. We'll email you a 6-digit code to confirm it's you."}
         </p>
@@ -173,7 +177,7 @@ export function StepUpDialog({ client, methods, fallbacks, onConfirmed, onCancel
  * A sign-in option for passkeys, laid out like the portals' other sign-in options (icon, title, hint,
  * chevron); pass the portal's option class. Hidden in browsers without passkeys.
  */
-export function PasskeySignInButton({ client, onSignedIn, onError, className = "bpk-option", disabled = false }: { client: PasskeyClient; onSignedIn: () => void; onError: (message: string) => void; className?: string; disabled?: boolean }) {
+export function PasskeySignInButton({ client, onSignedIn, onError, className = "bpk-option", disabled = false, chevron = true }: { client: PasskeyClient; onSignedIn: () => void; onError: (message: string) => void; className?: string; disabled?: boolean; chevron?: boolean }) {
   const [supported, setSupported] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => setSupported(passkeysSupported()), []);
@@ -191,8 +195,8 @@ export function PasskeySignInButton({ client, onSignedIn, onError, className = "
     }
   }}>
     {busy ? <SpinnerIcon /> : <PasskeyIcon />}
-    <span><strong>{busy ? "Waiting for your passkey…" : "Sign in with a passkey"}</strong><small>Face ID, Touch ID, Windows Hello or a security key</small></span>
-    <ChevronIcon />
+    <span><strong>{busy ? "Waiting for your passkey…" : "Sign in with a passkey"}</strong><small>Face ID, fingerprint or security key</small></span>
+    {chevron ? <ChevronIcon /> : null}
   </button>;
 }
 

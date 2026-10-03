@@ -40,7 +40,7 @@
 .bpk-row-copy span { color: var(--muted, #6b7380); font-size: 11.5px; line-height: 1.4; }
 .bpk-row-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .bpk-rename { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
-.bpk-rename input { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border-strong, #0000003a); border-radius: 9px; background: var(--surface, #fff); color: var(--text, #17191c); font: inherit; font-size: 13px; outline: none; }
+.bpk-rename input { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border, #00000024); border-radius: 9px; background: var(--surface, #fff); color: var(--text, #17191c); font: inherit; font-size: 13px; outline: none; }
 .bpk-skeleton { height: 62px; margin-top: 14px; border-radius: 13px; background: linear-gradient(90deg, var(--surface-2, #f5f4ef), var(--surface-3, #eeede7), var(--surface-2, #f5f4ef)); background-size: 200% 100%; animation: bpk-shimmer 1.3s ease-in-out infinite; }
 @keyframes bpk-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
@@ -53,7 +53,7 @@
 .bpk-dialog-copy { margin: 0 0 16px; color: var(--muted, #6b7380); font-size: 13px; line-height: 1.55; }
 .bpk-dialog > .bpk-primary { width: 100%; min-height: 46px; font-size: 14px; }
 .bpk-code { display: grid; gap: 10px; }
-.bpk-code input { height: 48px; border: 1px solid var(--border-strong, #0000003a); border-radius: 12px; background: var(--surface-2, #f5f4ef); color: var(--text, #17191c); font: inherit; font-size: 22px; font-weight: 600; letter-spacing: .35em; text-align: center; outline: none; }
+.bpk-code input { height: 48px; border: 1px solid var(--border, #00000024); border-radius: 12px; background: var(--surface-2, #f5f4ef); color: var(--text, #17191c); font: inherit; font-size: 22px; font-weight: 600; letter-spacing: .35em; text-align: center; outline: none; }
 .bpk-code .bpk-primary { min-height: 46px; }
 .bpk-dialog-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; margin-top: 14px; }
 @keyframes bpk-fade { from { opacity: 0; } }
@@ -70,3 +70,13 @@
 @media (prefers-reduced-motion: reduce) {
   .bpk-spinner, .bpk-skeleton, .bpk-overlay, .bpk-dialog, .bpk-dialog-icon.bpk-done { animation: none; }
 }
+
+/* Fields stay neutral when focused: no outline, ring or coloured border. Host portals style every
+   input:focus-visible, and their --border-strong is an accent colour, so these rules win on purpose. */
+.bpk-rename input:focus, .bpk-rename input:focus-visible,
+.bpk-code input:focus, .bpk-code input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border-color: var(--border, #00000024) !important;
+}
+.bpk-code input:focus { background: var(--surface-3, var(--surface-2, #efede6)); }
