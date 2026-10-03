@@ -47,6 +47,10 @@ const StepUpRequiredCode = "step_up_required"
 // account has no other way to confirm it's the owner.
 const ReauthRequiredCode = "reauth_required"
 
+// ConfirmationUnavailableCode is the "code" answered when an action that asks every time is attempted by an
+// account with no passkey or fallback to confirm with.
+const ConfirmationUnavailableCode = "confirmation_unavailable"
+
 // Mount registers the passkey endpoints with the portal's router through handle (for chi:
 // func(method, path string, h http.HandlerFunc) { r.Method(method, path, h) }).
 func (s *Service) Mount(hooks Hooks, handle func(method, path string, handler http.HandlerFunc)) {
@@ -76,6 +80,46 @@ func (s *Service) RequireRecentAuth(hooks Hooks) func(http.Handler) http.Handler
 				return
 			}
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// RequireConfirmationEachTime wraps the most important actions, such as changing where money is paid: they
+// ask every time, whatever the step-up window or how recently the person signed in. Each confirmation
+// (passkey or fallback) allows one such action within ConfirmEachTimeWindow and is then used up. An
+// account with no way to confirm cannot perform these actions at all.
+func (s *Service) RequireConfirmationEachTime(hooks Hooks) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, sessionKey, err := hooks.Current(r)
+			if err != nil {
+				writeError(w, http.StatusUnauthorized, "authentication required", "")
+				return
+			}
+			used, err := s.ConsumeConfirmation(r.Context(), sessionKey)
+			if err != nil {
+				writeError(w, http.StatusServiceUnavailable, "Confirmation is temporarily unavailable. Try again.", "")
+				return
+			}
+			if used {
+				next.ServeHTTP(w, r)
+				return
+			}
+			methods, err := s.methods(r, hooks, user)
+			if err != nil {
+				writeError(w, http.StatusServiceUnavailable, "Confirmation is temporarily unavailable. Try again.", "")
+				return
+			}
+			if len(methods) == 0 {
+				writeError(w, http.StatusForbidden, "Add a passkey or an authenticator app to your account to make this change.", ConfirmationUnavailableCode)
+				return
+			}
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":   "Confirm it's you to continue.",
+				"code":    StepUpRequiredCode,
+				"methods": methods,
+				"always":  true,
+			})
 		})
 	}
 }

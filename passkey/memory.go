@@ -19,7 +19,7 @@ type MemoryStore struct {
 	sessions   map[string]*memorySession
 }
 
-type memorySession struct{ created, stepUp time.Time }
+type memorySession struct{ created, stepUp, confirmed time.Time }
 
 // AddSession registers a portal session created at createdAt, as the portal's own session record would.
 func (m *MemoryStore) AddSession(key string, createdAt time.Time) {
@@ -125,15 +125,25 @@ func (m *MemoryStore) TakeCeremony(_ context.Context, id string) (Ceremony, erro
 	delete(m.ceremonies, id)
 	return c, nil
 }
-func (m *MemoryStore) MarkStepUp(_ context.Context, key string, until time.Time) error {
+func (m *MemoryStore) MarkStepUp(_ context.Context, key string, confirmedAt, until time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	session, ok := m.sessions[key]
 	if !ok {
 		return ErrNotFound
 	}
-	session.stepUp = until
+	session.stepUp, session.confirmed = until, confirmedAt
 	return nil
+}
+func (m *MemoryStore) ConsumeConfirmation(_ context.Context, key string, notBefore time.Time) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.sessions[key]
+	if !ok || session.confirmed.IsZero() || session.confirmed.Before(notBefore) {
+		return false, nil
+	}
+	session.confirmed = time.Time{}
+	return true, nil
 }
 func (m *MemoryStore) SessionTimes(_ context.Context, key string) (time.Time, time.Time, error) {
 	m.mu.Lock()

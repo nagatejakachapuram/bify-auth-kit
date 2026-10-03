@@ -36,6 +36,9 @@ import "@bify/passkeys/styles.css";
   bound to the session that started them.
 - User verification (biometric or device PIN) is required: a passkey is two factors by itself.
 - Adding or removing a passkey requires a recent confirmation (passkey, fallback code, or a sign-in within 5 minutes).
+- `RequireConfirmationEachTime` guards the most important actions (for example where money is paid): they
+  ask every time, whatever the 5-minute window or a fresh sign-in, and each confirmation allows one of them
+  within 2 minutes before it is used up.
 - Only public credential data is stored, never private keys. A signature counter that does not advance (a
   possibly cloned key) is refused, with a compare-and-swap so concurrent sign-ins cannot overwrite a newer count.
 - The per-account passkey limit holds under concurrent registrations (a membership revision written in the same

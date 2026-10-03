@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -57,6 +58,7 @@ var (
 	reNotExists = regexp.MustCompile(`^attribute_not_exists\((\w+)\)$`)
 	reExists    = regexp.MustCompile(`^attribute_exists\((\w+)\)$`)
 	reEquals    = regexp.MustCompile(`^(\w+) = (:\w+)$`)
+	reAtLeast   = regexp.MustCompile(`^(\w+) >= (:\w+)$`)
 )
 
 func (f *fakeDynamo) check(expr *string, item map[string]types.AttributeValue, values map[string]types.AttributeValue) bool {
@@ -79,6 +81,19 @@ func (f *fakeDynamo) check(expr *string, item map[string]types.AttributeValue, v
 			if item == nil || str(item, m[1]) != str(values, m[2]) {
 				return false
 			}
+		case reAtLeast.MatchString(clause):
+			// Like DynamoDB: a comparison with a missing attribute is false.
+			m := reAtLeast.FindStringSubmatch(clause)
+			have, ok := item[m[1]].(*types.AttributeValueMemberN)
+			want, _ := values[m[2]].(*types.AttributeValueMemberN)
+			if !ok || want == nil {
+				return false
+			}
+			h, _ := strconv.ParseInt(have.Value, 10, 64)
+			w, _ := strconv.ParseInt(want.Value, 10, 64)
+			if h < w {
+				return false
+			}
 		default:
 			f.t.Fatalf("fakeDynamo: unsupported condition %q", clause)
 		}
@@ -87,6 +102,12 @@ func (f *fakeDynamo) check(expr *string, item map[string]types.AttributeValue, v
 }
 
 func (f *fakeDynamo) apply(item map[string]types.AttributeValue, expr string, names map[string]string, values map[string]types.AttributeValue) {
+	if strings.HasPrefix(expr, "REMOVE ") {
+		for _, name := range strings.Split(strings.TrimPrefix(expr, "REMOVE "), ",") {
+			delete(item, strings.TrimSpace(name))
+		}
+		return
+	}
 	if !strings.HasPrefix(expr, "SET ") {
 		f.t.Fatalf("fakeDynamo: unsupported update %q", expr)
 	}
@@ -251,8 +272,19 @@ func TestDynamoStoreRunsTheWholeLifecycle(t *testing.T) {
 	if recent, _ := svc.RecentlyAuthenticated(ctx, "old"); !recent {
 		t.Fatal("confirmation not recorded on the session")
 	}
-	if err := store.MarkStepUp(ctx, "revoked", now.Add(time.Minute)); !errors.Is(err, ErrNotFound) {
+	if err := store.MarkStepUp(ctx, "revoked", now, now.Add(time.Minute)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("confirming a revoked session = %v", err)
+	}
+
+	// An action that asks every time uses the confirmation up: once, and only while it is fresh.
+	if used, err := svc.ConsumeConfirmation(ctx, "old"); err != nil || !used {
+		t.Fatalf("using a fresh confirmation = %v, %v", used, err)
+	}
+	if used, _ := svc.ConsumeConfirmation(ctx, "old"); used {
+		t.Fatal("a confirmation was used twice")
+	}
+	if used, _ := svc.ConsumeConfirmation(ctx, "revoked"); used {
+		t.Fatal("a revoked session used a confirmation")
 	}
 
 	if err := svc.Rename(ctx, user.ID, passkey.ID, "Work MacBook"); err != nil {

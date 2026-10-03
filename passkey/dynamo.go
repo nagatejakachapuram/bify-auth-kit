@@ -218,19 +218,35 @@ func (d DynamoStore) TakeCeremony(ctx context.Context, id string) (Ceremony, err
 }
 
 // MarkStepUp records a confirmation on the portal's session record. The session must exist and not be
-// revoked.
-func (d DynamoStore) MarkStepUp(ctx context.Context, sessionKey string, until time.Time) error {
+// revoked. confirmedAt is kept separately so an action that asks every time can use it up once.
+func (d DynamoStore) MarkStepUp(ctx context.Context, sessionKey string, confirmedAt, until time.Time) error {
 	_, err := d.DB.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(d.Table),
 		Key:                       map[string]types.AttributeValue{"PK": s("SESSION#" + sessionKey), "SK": s(stateSK)},
-		UpdateExpression:          aws.String("SET stepUpUntil = :until"),
+		UpdateExpression:          aws.String("SET stepUpUntil = :until, confirmedAt = :at"),
 		ConditionExpression:       aws.String("attribute_exists(PK) AND attribute_not_exists(revokedAt)"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{":until": n(until.Unix())},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":until": n(until.Unix()), ":at": n(confirmedAt.Unix())},
 	})
 	if conditionFailed(err) {
 		return ErrNotFound
 	}
 	return err
+}
+
+// ConsumeConfirmation removes the session's last confirmation in one conditional write, only if it was made
+// at or after notBefore, so two requests can never both use the same confirmation.
+func (d DynamoStore) ConsumeConfirmation(ctx context.Context, sessionKey string, notBefore time.Time) (bool, error) {
+	_, err := d.DB.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(d.Table),
+		Key:                       map[string]types.AttributeValue{"PK": s("SESSION#" + sessionKey), "SK": s(stateSK)},
+		UpdateExpression:          aws.String("REMOVE confirmedAt"),
+		ConditionExpression:       aws.String("attribute_exists(PK) AND attribute_not_exists(revokedAt) AND confirmedAt >= :min"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":min": n(notBefore.Unix())},
+	})
+	if conditionFailed(err) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // SessionTimes reads when the session was created and until when its last confirmation counts.

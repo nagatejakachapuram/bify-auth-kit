@@ -57,6 +57,9 @@ type Config struct {
 	CeremonyTTL time.Duration
 	// StepUpWindow is how long a confirmation (or a fresh sign-in) counts as recent. Default 5 minutes.
 	StepUpWindow time.Duration
+	// ConfirmEachTimeWindow is how soon after confirming an action that asks every time must run (see
+	// RequireConfirmationEachTime). Default 2 minutes: enough to finish the dialog and retry.
+	ConfirmEachTimeWindow time.Duration
 	// MaxPerUser caps passkeys per account. Default 10.
 	MaxPerUser int
 	// Now is the clock; nil means time.Now.
@@ -128,8 +131,12 @@ type Store interface {
 	DeletePasskey(ctx context.Context, userID string, credentialID []byte) error
 	SaveCeremony(ctx context.Context, ceremony Ceremony) error
 	TakeCeremony(ctx context.Context, id string) (Ceremony, error)
-	MarkStepUp(ctx context.Context, sessionKey string, until time.Time) error
+	// MarkStepUp records a confirmation made at confirmedAt; it counts as recent until until.
+	MarkStepUp(ctx context.Context, sessionKey string, confirmedAt, until time.Time) error
 	SessionTimes(ctx context.Context, sessionKey string) (createdAt, stepUpUntil time.Time, err error)
+	// ConsumeConfirmation atomically uses up the session's last confirmation if it was made at or after
+	// notBefore, and reports whether it did. Each confirmation can be used up once.
+	ConsumeConfirmation(ctx context.Context, sessionKey string, notBefore time.Time) (bool, error)
 }
 
 // Service runs passkey ceremonies for one portal.
@@ -146,6 +153,9 @@ func New(cfg Config, store Store) (*Service, error) {
 	}
 	if cfg.RPDisplayName == "" {
 		cfg.RPDisplayName = "BIFY"
+	}
+	if cfg.ConfirmEachTimeWindow <= 0 {
+		cfg.ConfirmEachTimeWindow = 2 * time.Minute
 	}
 	if cfg.CeremonyTTL <= 0 {
 		cfg.CeremonyTTL = 5 * time.Minute
@@ -394,7 +404,14 @@ func (s *Service) FinishStepUp(ctx context.Context, user User, sessionKey, cerem
 // MarkStepUp records that the session just confirmed it is its owner (by passkey, or by a fallback such
 // as an authenticator or email code that the portal verified itself).
 func (s *Service) MarkStepUp(ctx context.Context, sessionKey string) error {
-	return s.store.MarkStepUp(ctx, sessionKey, s.cfg.Now().UTC().Add(s.cfg.StepUpWindow))
+	now := s.cfg.Now().UTC()
+	return s.store.MarkStepUp(ctx, sessionKey, now, now.Add(s.cfg.StepUpWindow))
+}
+
+// ConsumeConfirmation uses up a confirmation made within the last ConfirmEachTimeWindow, for an action
+// that asks every time. It reports false when there is none to use.
+func (s *Service) ConsumeConfirmation(ctx context.Context, sessionKey string) (bool, error) {
+	return s.store.ConsumeConfirmation(ctx, sessionKey, s.cfg.Now().UTC().Add(-s.cfg.ConfirmEachTimeWindow))
 }
 
 // RecentlyAuthenticated reports whether the session confirmed itself, or signed in, within the step-up

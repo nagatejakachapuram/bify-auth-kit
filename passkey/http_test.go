@@ -317,3 +317,57 @@ func TestSigningInWithARemovedPasskeyTellsTheBrowser(t *testing.T) {
 		t.Fatalf("list sync fields = %+v", list)
 	}
 }
+
+func TestTheMostImportantActionsAskEveryTime(t *testing.T) {
+	f := newFixture(t)
+	session := "session-a" // signed in an hour ago
+	var fallbacks []string = []string{"totp"}
+	hooks := Hooks{
+		Current:   func(*http.Request) (User, string, error) { return f.user, session, nil },
+		Fallbacks: func(*http.Request, User) ([]string, error) { return fallbacks, nil },
+	}
+	payout := f.svc.RequireConfirmationEachTime(hooks)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	call := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		payout.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/developer/merchant/payout", nil))
+		return rec
+	}
+	asked := func(rec *httptest.ResponseRecorder) bool {
+		body := decode[map[string]any](t, rec)
+		return rec.Code == http.StatusForbidden && body["code"] == StepUpRequiredCode && body["always"] == true
+	}
+
+	if rec := call(); !asked(rec) {
+		t.Fatalf("no confirmation = %d %s", rec.Code, rec.Body.String())
+	}
+	// Signing in just now does not count.
+	f.store.AddSession("session-fresh", f.now)
+	session = "session-fresh"
+	if rec := call(); !asked(rec) {
+		t.Fatalf("fresh sign-in = %d %s", rec.Code, rec.Body.String())
+	}
+	// A confirmation allows exactly one such action; the next one asks again, even inside the
+	// five-minute window that other sensitive actions use.
+	if err := f.svc.MarkStepUp(t.Context(), session); err != nil {
+		t.Fatal(err)
+	}
+	if rec := call(); rec.Code != http.StatusNoContent {
+		t.Fatalf("after confirming = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := call(); !asked(rec) {
+		t.Fatalf("second action on one confirmation = %d %s", rec.Code, rec.Body.String())
+	}
+	// A confirmation not used promptly expires for these actions.
+	if err := f.svc.MarkStepUp(t.Context(), session); err != nil {
+		t.Fatal(err)
+	}
+	f.now = f.now.Add(3 * time.Minute)
+	if rec := call(); !asked(rec) {
+		t.Fatalf("stale confirmation = %d %s", rec.Code, rec.Body.String())
+	}
+	// An account with nothing to confirm with cannot make these changes at all.
+	fallbacks = nil
+	if rec := call(); rec.Code != http.StatusForbidden || decode[map[string]string](t, rec)["code"] != ConfirmationUnavailableCode {
+		t.Fatalf("no way to confirm = %d %s", rec.Code, rec.Body.String())
+	}
+}
