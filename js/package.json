@@ -1,6 +1,6 @@
 {
   "name": "@bify/passkeys",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Passkey sign-in, management and step-up confirmation shared by the BIFY developer portal and BIFY Account.",
   "license": "UNLICENSED",
   "type": "module",
